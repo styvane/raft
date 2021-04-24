@@ -1,7 +1,8 @@
 use kvserver::Client;
 use structopt::StructOpt;
 
-fn main() {
+#[async_std::main]
+async fn main() {
     let mut client = Client::from_args();
-    client.connect();
+    client.connect().await;
 }

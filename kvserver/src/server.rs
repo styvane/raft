@@ -2,14 +2,14 @@
 
 use crate::command::Command;
 use crate::storage::Storage;
-use anyhow::{self, Context};
+use anyhow;
+use async_std::net::{TcpListener, TcpStream};
+use async_std::prelude::*;
+use async_std::task;
 use raft_core::Transport;
 use serde::Deserialize;
 use serde_json;
-use std::io;
-use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
-use std::thread;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt, Deserialize)]
@@ -37,25 +37,27 @@ impl Server {
         }
     }
 
-    fn handle_client(client: Arc<TcpStream>) {
+    pub async fn handle_client(client: Arc<TcpStream>) {
         loop {
             let mut trp = Transport::new(client.as_ref());
-            let message = trp.recv_message().unwrap();
+            let message = trp.recv_message().await.unwrap();
             if message.trim().is_empty() {
                 break;
             }
-            let _cmd: Command = serde_json::from_str(&message).unwrap();
+            let cmd: Command = serde_json::from_str(&message).unwrap();
+            println!("{:? }", cmd);
         }
     }
 
     /// Listen to incomming connection and serve request.
-    pub fn listen_and_serve(&mut self) -> io::Result<()> {
+    pub async fn listen_and_serve(&mut self) -> anyhow::Result<()> {
         let listener =
-            TcpListener::bind(format!("{}:{}", self.options.bind_ip, self.options.port))?;
+            TcpListener::bind(format!("{}:{}", self.options.bind_ip, self.options.port)).await?;
 
-        for stream in listener.incoming() {
-            let stream = Arc::new(stream.unwrap());
-            thread::spawn(move || Self::handle_client(stream));
+        while let Some(stream) = listener.incoming().next().await {
+            let stream = stream?;
+            let stream = Arc::new(stream);
+            let _handle = task::spawn(Self::handle_client(stream));
         }
         Ok(())
     }

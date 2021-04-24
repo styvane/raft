@@ -1,8 +1,9 @@
 //! Transport implement the message passing system.
 
-use anyhow::{self, Context};
+use anyhow::{self, Context as _};
 
-use std::io::{self, BufWriter, ErrorKind, Read, Write};
+use async_std::io::{self, BufWriter};
+use async_std::prelude::*;
 
 /// HEADER_SIZE is the size of the message.
 const HEADER_SIZE: usize = 10000;
@@ -17,29 +18,30 @@ pub struct Transport<T> {
 
 impl<T> Transport<T>
 where
-    T: io::Read + io::Write,
+    T: io::Read + io::Write + Unpin,
 {
     pub fn new(messenger: T) -> Self {
         Transport { messenger }
     }
 
     /// Send a header-prefixed message over the network.
-    pub fn send_message(&mut self, message: &[u8]) -> anyhow::Result<usize> {
+    pub async fn send_message(&mut self, message: &[u8]) -> anyhow::Result<usize> {
         let header = format!("{:>size$}", message.len(), size = HEADER_SIZE);
         let header = header.as_bytes();
         let mut writer = BufWriter::with_capacity(HEADER_SIZE + message.len(), &mut self.messenger);
-        writer.write(header)?;
-        let size = writer.write(message)?;
-        writer.flush().context("Failed to flush buffer")?;
+        writer.write(header).await?;
+        let size = writer.write(message).await?;
+        writer.flush().await.context("Failed to flush buffer")?;
 
         Ok(size)
     }
 
     /// Receive a header-prefixed message.
-    pub fn recv_message(&mut self) -> anyhow::Result<String> {
+    pub async fn recv_message(&mut self) -> anyhow::Result<String> {
         let mut size = [0; HEADER_SIZE];
         self.messenger
             .read_exact(&mut size)
+            .await
             .context("Unable to read message header")?;
 
         let size = String::from_utf8(size.to_vec()).unwrap();
@@ -48,6 +50,7 @@ where
 
         self.messenger
             .read_exact(&mut buf)
+            .await
             .context("Reading received message failed")?;
         String::from_utf8(buf).context("Unable to convert message to string")
     }
@@ -56,82 +59,110 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_std::task::{Context, Poll};
+    use std::cell::RefCell;
+    use std::pin::Pin;
 
-    struct MockMesseger {
-        buf: Option<String>,
+    struct MockMessenger {
+        buf: RefCell<Option<String>>,
     }
 
-    impl io::Read for MockMesseger {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            match self.buf.as_mut() {
+    impl io::Read for MockMessenger {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
+            match &mut *self.as_ref().buf.borrow_mut() {
                 Some(data) => {
                     let bytes = data.as_bytes();
                     buf.copy_from_slice(&bytes[..buf.len()]);
                     data.drain(..buf.len());
 
-                    Ok(buf.len())
+                    Poll::Ready(Ok(buf.len()))
                 }
-                None => Err(io::Error::new(ErrorKind::UnexpectedEof, "no data")),
+                None => Poll::Ready(Err(io::Error::new(io::ErrorKind::UnexpectedEof, "no data"))),
             }
         }
     }
 
-    impl MockMesseger {
+    impl MockMessenger {
         fn new() -> Self {
-            MockMesseger { buf: None }
+            MockMessenger {
+                buf: RefCell::new(None),
+            }
         }
     }
 
-    impl io::Write for MockMesseger {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+    impl io::Write for MockMessenger {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
             let len = buf.len();
             match String::from_utf8(buf.to_vec()) {
                 Ok(s) => {
-                    match self.buf.as_mut() {
+                    let mut new_data = String::new();
+                    let buf = self.as_ref().buf.borrow().clone();
+                    match buf {
                         Some(v) => {
-                            v.push_str(&s);
+                            new_data.push_str(&v);
+                            new_data.push_str(&s);
                         }
                         None => {
-                            self.buf.replace(s);
+                            new_data = s;
                         }
                     };
-                    return Ok(len);
+
+                    self.buf.borrow_mut().replace(new_data);
+
+                    return Poll::Ready(Ok(len));
                 }
-                Err(_) => return Err(io::Error::new(ErrorKind::Other, "invalid utf-8 data")),
+                Err(_) => {
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "invalid utf-8 data",
+                    )))
+                }
             }
         }
 
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
         }
     }
 
-    #[test]
-    fn test_send_message() {
-        let m = MockMesseger::new();
+    #[async_std::test]
+    async fn test_send_message() {
+        let m = MockMessenger::new();
         let mut trp = Transport::new(m);
-        assert!(trp.send_message(b"hello").is_ok());
+        assert!(trp.send_message(b"hello").await.is_ok());
     }
 
-    #[test]
-    fn test_recv_one_message() {
-        let m = MockMesseger::new();
+    #[async_std::test]
+    async fn test_recv_one_message() {
+        let m = MockMessenger::new();
         let mut trp = Transport::new(m);
-        assert!(trp.send_message(b"hello").is_ok());
-        assert_eq!(trp.recv_message().unwrap(), "hello");
+        assert!(trp.send_message(b"hello").await.is_ok());
+        assert_eq!(trp.recv_message().await.unwrap(), "hello");
     }
 
-    #[test]
-    fn test_recv_multi_messages() {
-        let m = MockMesseger::new();
+    #[async_std::test]
+    async fn test_recv_multi_messages() {
+        let m = MockMessenger::new();
         let mut trp = Transport::new(m);
-        assert!(trp.send_message(b"hello").is_ok());
-        assert!(trp.send_message(b"world").is_ok());
+        assert!(trp.send_message(b"hello").await.is_ok());
+        assert!(trp.send_message(b"world").await.is_ok());
 
-        let mut data = trp.recv_message().unwrap();
+        let mut data = trp.recv_message().await.unwrap();
         assert_eq!(data, "hello");
 
-        data = trp.recv_message().unwrap();
+        data = trp.recv_message().await.unwrap();
         assert_eq!(data, "world");
     }
 }
