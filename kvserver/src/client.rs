@@ -2,7 +2,7 @@
 
 use rustyline::Editor;
 
-use raft_core::transport::{Transport, Transporter};
+use raft_core::transport::Transport;
 use std::io::{self, BufRead, Read, Write};
 use std::net::TcpStream;
 use structopt::StructOpt;

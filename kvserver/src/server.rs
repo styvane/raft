@@ -2,7 +2,8 @@
 
 use crate::command::Command;
 use crate::storage::Storage;
-use raft_core::{Transport, Transporter};
+use anyhow::{self, Context};
+use raft_core::Transport;
 use serde::Deserialize;
 use serde_json;
 use std::io;
@@ -24,7 +25,7 @@ pub struct ServerOptions {
 /// The `Server` type represents the storage server
 pub struct Server {
     options: ServerOptions,
-    storage: Storage,
+    _storage: Storage,
 }
 
 impl Server {
@@ -32,7 +33,7 @@ impl Server {
     pub fn new(options: ServerOptions) -> Self {
         Server {
             options,
-            storage: Storage::new(),
+            _storage: Storage::new(),
         }
     }
 
@@ -43,7 +44,7 @@ impl Server {
             if message.trim().is_empty() {
                 break;
             }
-            let cmd: Command = serde_json::from_str(&message).unwrap();
+            let _cmd: Command = serde_json::from_str(&message).unwrap();
         }
     }
 
