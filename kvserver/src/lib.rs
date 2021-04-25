@@ -4,5 +4,4 @@ pub mod server;
 pub use server::Server;
 pub use server::ServerOptions;
 mod command;
-pub mod storage;
-pub use storage::Storage;
+mod storage;
