@@ -1,15 +1,14 @@
 //! This module contains the server.
 
-use crate::command::Command;
 use crate::storage::Storage;
 use anyhow;
+use async_std::io::{Read, Write};
 use async_std::net::{TcpListener, TcpStream};
 use async_std::prelude::*;
 use async_std::task;
 use raft_core::Transport;
 use serde::Deserialize;
 use serde_json;
-use std::sync::Arc;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt, Deserialize)]
@@ -23,9 +22,10 @@ pub struct ServerOptions {
 }
 
 /// The `Server` type represents the storage server
+#[allow(dead_code)]
 pub struct Server {
     options: ServerOptions,
-    _storage: Storage,
+    storage: Storage,
 }
 
 impl Server {
@@ -33,19 +33,24 @@ impl Server {
     pub fn new(options: ServerOptions) -> Self {
         Server {
             options,
-            _storage: Storage::new(),
+            storage: Storage::new(),
         }
     }
 
-    pub async fn handle_client(client: Arc<TcpStream>) {
+    pub async fn read_stream(stream: impl Read + Write + Unpin + Clone) {
         loop {
-            let mut trp = Transport::new(client.as_ref());
+            let mut trp = Transport::new(stream.clone());
             let message = trp.recv_message().await.unwrap();
             if message.trim().is_empty() {
                 break;
             }
-            let cmd: Command = serde_json::from_str(&message).unwrap();
-            println!("{:? }", cmd);
+            let _cmd = match serde_json::from_str(&message) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("{:?}", e);
+                    continue;
+                }
+            };
         }
     }
 
@@ -56,9 +61,12 @@ impl Server {
 
         while let Some(stream) = listener.incoming().next().await {
             let stream = stream?;
-            let stream = Arc::new(stream);
-            let _handle = task::spawn(Self::handle_client(stream));
+            let _handle = task::spawn(Self::read_stream(stream));
         }
         Ok(())
+    }
+
+    pub async fn write_stream(stream: impl Read + Write + Unpin + Clone) {
+        let _trp = Transport::new(stream.clone());
     }
 }
