@@ -8,9 +8,6 @@ use async_std::prelude::*;
 /// HEADER_SIZE is the size of the message.
 const HEADER_SIZE: usize = 10000;
 
-/// This trait groups the basic Read and Write traits.
-pub trait ReaderWriter: io::Read + io::Write {}
-
 /// The `Transport` owns the data for sending/receiving bytes.
 pub struct Transport<T> {
     messenger: T,
