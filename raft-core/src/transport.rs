@@ -9,6 +9,7 @@ use async_std::prelude::*;
 const HEADER_SIZE: usize = 10000;
 
 /// The `Transport` owns the data for sending/receiving bytes.
+#[derive(Debug, Clone)]
 pub struct Transport<T> {
     messenger: T,
 }

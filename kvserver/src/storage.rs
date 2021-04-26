@@ -2,9 +2,7 @@
 //! This module contains a key/value storage implementations.
 
 use crate::command::{Command, Key, Value};
-use async_std;
 use std::collections::BTreeMap;
-use std::str::FromStr;
 
 /// The type `Storage` type is a key/value storage.
 #[derive(Debug)]
@@ -18,7 +16,11 @@ impl Storage {
 
     /// Return a reference to a value corresponding to a key.
     async fn perform_get(&self, key: &Key) -> Option<Value> {
-        self.0.get(key).cloned()
+        if let Some(value) = self.0.get(key).cloned() {
+            Some(value)
+        } else {
+            Some("NOK".parse::<Value>().unwrap())
+        }
     }
 
     /// Return a reference to a value corresponding to a key.
@@ -48,6 +50,7 @@ impl Storage {
                 let value: Value = value.parse().unwrap();
                 Some(value)
             }
+            Command::Invalid(value) => Some(value.parse::<Value>().unwrap()),
         }
     }
 }
@@ -55,6 +58,7 @@ impl Storage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[async_std::test]
     async fn test_set_query() {
@@ -84,7 +88,7 @@ mod tests {
             key: Key::from_str("foo").unwrap(),
         };
 
-        assert_eq!(s.query(cmd).await, None)
+        assert_eq!(s.query(cmd).await, Some(Value::from_str("NOK").unwrap()))
     }
 
     #[async_std::test]
@@ -94,6 +98,7 @@ mod tests {
             key: Key::from_str("foo").unwrap(),
             value: Value::from_str("foo_val").unwrap(),
         };
+
         assert_eq!(s.query(cmd).await, Some(Value::from_str("OK").unwrap()));
 
         let cmd = Command::Get {
@@ -114,6 +119,6 @@ mod tests {
             key: Key::from_str("foo").unwrap(),
         };
 
-        assert_eq!(s.query(cmd).await, None)
+        assert_eq!(s.query(cmd).await, Some(Value::from_str("NOK").unwrap()))
     }
 }

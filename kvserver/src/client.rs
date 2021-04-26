@@ -32,6 +32,8 @@ impl Client {
             let mut editor = Editor::<()>::new();
             let command: String = editor.readline("> ").unwrap();
             trp.send_message(command.as_bytes()).await.unwrap();
+            let message = trp.recv_message().await.unwrap();
+            println!("{:?}", message);
         }
     }
 }
