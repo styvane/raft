@@ -2,5 +2,6 @@
 
 members = [
     "kvserver",
+    "raft-utils",
     "raft-core",
 ]

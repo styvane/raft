@@ -419,7 +419,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-std",
- "raft-core",
+ "raft-utils",
  "rustyline",
  "serde",
  "serde_json",
@@ -576,6 +576,14 @@ dependencies = [
 
 [[package]]
 name = "raft-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-std",
+]
+
+[[package]]
+name = "raft-utils"
 version = "0.1.0"
 dependencies = [
  "anyhow",

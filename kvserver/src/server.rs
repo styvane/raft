@@ -6,7 +6,7 @@ use async_std::channel::{self, Receiver, Sender};
 use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
-use raft_core::Transport;
+use raft_utils::Transport;
 use serde::Deserialize;
 use std::sync::Arc;
 

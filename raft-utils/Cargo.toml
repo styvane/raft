@@ -1,0 +1,13 @@
+[package]
+name = "raft-utils"
+version = "0.1.0"
+authors = ["Styvane Soukossi <styvane@acm.org>"]
+edition = "2018"
+
+
+[dependencies]
+anyhow = "1.0"
+
+[dependencies.async-std]
+version = "1.9"
+features = ["attributes"]

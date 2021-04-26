@@ -17,8 +17,8 @@ serde_json = "1.0"
 rustyline = "8.0.0"
 anyhow = "1.0"
 
-[dependencies.raft-core]
-path = "../raft-core"
+[dependencies.raft-utils]
+path = "../raft-utils"
 
 
 [dependencies.async-std]

@@ -3,7 +3,7 @@
 use async_std::net::TcpStream;
 use rustyline::Editor;
 
-use raft_core::Transport;
+use raft_utils::Transport;
 use structopt::StructOpt;
 
 /// The type client is the key/value storage client.
