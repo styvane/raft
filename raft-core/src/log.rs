@@ -131,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn test_scenario_paper_fig7() {
+    fn test_scenario_paper_fig7_a() {
         let leader = test_setup_leader_paper_fig7();
         let mut follower_a = Log::from(vec![
             Entry::new(1, 'a'),
@@ -143,10 +143,16 @@ mod tests {
             Entry::new(5, 'h'),
             Entry::new(6, 'i'),
             Entry::new(6, 'j'),
+            Entry::new(6, 'k'),
         ]);
-
-        assert!(follower_a.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
+        let ok = follower_a.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]);
+        assert!(ok);
         assert_eq!(follower_a.entries, leader.entries);
+    }
+
+    #[test]
+    fn test_scenario_paper_fig7_b() {
+        let leader = test_setup_leader_paper_fig7();
         let mut follower_b = Log::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
@@ -154,9 +160,13 @@ mod tests {
             Entry::new(4, 'd'),
         ]);
 
-        assert!(follower_b.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
+        assert!(!follower_b.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
         assert_ne!(follower_b.entries, leader.entries);
+    }
 
+    #[test]
+    fn test_scenario_paper_fig7_c() {
+        let leader = test_setup_leader_paper_fig7();
         let mut follower_c = Log::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
@@ -173,7 +183,10 @@ mod tests {
 
         assert!(follower_c.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
         assert_eq!(follower_c.entries, leader.entries);
-
+    }
+    #[test]
+    fn test_scenario_paper_fig7_d() {
+        let leader = test_setup_leader_paper_fig7();
         let mut follower_d = Log::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
@@ -190,7 +203,11 @@ mod tests {
         ]);
         assert!(follower_d.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
         assert_eq!(follower_d.entries, leader.entries);
+    }
 
+    #[test]
+    fn test_scenario_paper_fig7_e() {
+        let leader = test_setup_leader_paper_fig7();
         let mut follower_e = Log::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
@@ -201,12 +218,13 @@ mod tests {
             Entry::new(4, 'h'),
         ]);
 
-        assert!(!follower_e.append_entries(
-            Some(9),
-            Some(6),
-            &leader.entries[leader.entries.len() - 1..]
-        ));
+        assert!(!follower_e.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
         assert_ne!(follower_e.entries, leader.entries);
+    }
+
+    #[test]
+    fn test_scenario_paper_fig7f() {
+        let leader = test_setup_leader_paper_fig7();
         let mut follower_f = Log::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
