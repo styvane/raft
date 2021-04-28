@@ -77,6 +77,7 @@ impl<V: Clone + fmt::Debug> Log<V> {
             }
         }
 
+        // Ignore entries already present in the log.
         match previous_index {
             None => {
                 self.entries.truncate(0);
@@ -111,7 +112,12 @@ mod tests {
         assert_eq!(log.entries, [Entry::new(1, 'x')]);
         assert!(log.append_entries(Some(0), Some(1), &[Entry::new(1, 'y')]));
         assert!(log.append_entries(Some(0), Some(1), &[Entry::new(1, 'y')]));
-        assert_eq!(log.entries, [Entry::new(1, 'x'), Entry::new(1, 'y')]);
+        assert!(log.append_entries(Some(1), Some(1), &[Entry::new(2, 'y')]));
+        assert!(log.append_entries(Some(1), Some(1), &[Entry::new(2, 'y')]));
+        assert_eq!(
+            log.entries,
+            [Entry::new(1, 'x'), Entry::new(1, 'y'), Entry::new(2, 'y')]
+        );
     }
 
     fn test_setup_leader_paper_fig7() -> Log<char> {
