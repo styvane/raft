@@ -13,7 +13,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    fail-fast: false
+    strategy:
+      fail-fast: false
     steps:
       - uses: actions/checkout@v2
       - name: Run tests
@@ -21,6 +22,7 @@ jobs:
 
   build:
     name: build
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
       - name: Build
