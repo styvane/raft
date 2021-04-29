@@ -2,16 +2,18 @@
 
 use std::collections::HashMap;
 
+type Peers = Vec<String>;
+
 /// Node configuration
 #[derive(Debug)]
 pub struct Config {
     id: usize,
     addr: String,
-    peers: Vec<String>,
+    peers: Peers,
 }
 
 impl Config {
-    pub fn new(id: usize, addr: &str) -> Self {
+    pub fn new(id: usize, addr: String) -> Self {
         let config = Self::init();
         let peers: Vec<String> = config
             .into_iter()
@@ -44,10 +46,13 @@ mod tests {
 
     #[test]
     fn test_new() {
-        assert!(Config::new(0, "127.0.0.1:27000").peers.iter().all(|x| [
-            String::from("127.0.0.1:28000"),
-            String::from("127.0.0.1:29000")
-        ]
-        .contains(&x)))
+        assert!(Config::new(0, String::from("127.0.0.1:27000"))
+            .peers
+            .iter()
+            .all(|x| [
+                String::from("127.0.0.1:28000"),
+                String::from("127.0.0.1:29000")
+            ]
+            .contains(&x)))
     }
 }
