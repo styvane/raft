@@ -1,7 +1,11 @@
-//! Event in the Raft system.
+//! This module contains the definitions of various events in the Raft
+//! network.
+
+use crate::types::Index;
+/// Event in the Raft system.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum Event {
-    AppendEntries { current_term: Option<usize> },
+    AppendEntries { current_term: Index },
 }
 
 pub struct Message {

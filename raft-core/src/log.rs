@@ -1,5 +1,7 @@
 //! Raft log.
 
+use crate::types::{Index, Term};
+
 /// Entry owns the data for the log entry.
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone)]
 pub struct Entry<V> {
@@ -41,8 +43,8 @@ impl<V: Clone + fmt::Debug> Log<V> {
 
     pub fn append_entries(
         &mut self,
-        previous_index: Option<usize>,
-        previous_term: Option<usize>,
+        previous_index: Index,
+        previous_term: Term,
         entries: &[Entry<V>],
     ) -> bool {
         if let Some(index) = previous_index {
