@@ -25,10 +25,11 @@ pub trait Node {
 }
 
 /// The type `FakeNetwork` is a fake network for testing and simulation.
+#[derive(Debug)]
 pub struct FakeNetwork<V> {
     size: usize,
     members: HashMap<String, Rc<RefCell<VecDeque<Event<V>>>>>,
-    buf: Rc<RefCell<VecDeque<(String, Event<V>)>>>,
+    pub buf: Rc<RefCell<VecDeque<(String, Event<V>)>>>,
 }
 
 impl<V> FakeNetwork<V>
@@ -65,7 +66,7 @@ where
     }
 
     pub fn forward(&mut self) {
-        if let Some((dest, msg)) = self.buf.borrow_mut().pop_front() {
+        while let Some((dest, msg)) = self.buf.borrow_mut().pop_front() {
             if let Some(s) = self.members.get(&dest) {
                 s.borrow_mut().push_back(msg);
             }
@@ -74,6 +75,7 @@ where
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub struct FakeNode<V> {
     id: String,
     peers: Vec<String>,
@@ -120,7 +122,6 @@ mod tests {
         );
 
         net.forward();
-
         assert_eq!(
             node1.receive().unwrap(),
             Event::new_append_entries(None, None, None, vec![], None, "0", "1"),

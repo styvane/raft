@@ -9,6 +9,9 @@ pub struct Entry<V> {
     pub value: V,
 }
 
+/// A set of log entries.
+pub type Entries<V> = Vec<Entry<V>>;
+
 impl<V> Entry<V> {
     pub fn new(term: usize, value: V) -> Self {
         Entry { term, value }
@@ -29,16 +32,36 @@ impl<V: Clone + fmt::Debug> Log<V> {
         }
     }
 
+    /// Create a log from existing entries.
+    ///
+    /// This shoud be use for testing purpose only.
     pub(crate) fn from(entries: Vec<Entry<V>>) -> Self {
         Self { entries }
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
 
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Return previous log entry index.
+    pub fn previous_index(&self) -> Index {
+        if self.len() >= 1 {
+            Some(self.len() - 1)
+        } else {
+            None
+        }
+    }
+
+    /// Return the term of the previous log entry.
+    pub fn previous_term(&self) -> Term {
+        match self.entries.iter().last() {
+            Some(entry) => Some(entry.term),
+            None => None,
+        }
     }
 
     pub fn append_entries(
