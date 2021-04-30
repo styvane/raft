@@ -43,7 +43,7 @@ impl<V: Clone + fmt::Debug> Log<V> {
         self.entries.len()
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 

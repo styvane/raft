@@ -38,6 +38,8 @@ pub enum Event<V> {
         // index and previous term.
         success: bool,
 
+        // Index of the log that match with the leader.
+        match_index: Index,
         // Source Id
         source: String,
 
@@ -104,12 +106,14 @@ where
     pub fn new_append_entries_response(
         term: Term,
         success: bool,
+        match_index: Index,
         source: &str,
         dest: &str,
     ) -> Self {
         Self::AppendEntriesResponse {
             term,
             success,
+            match_index,
             source: source.to_string(),
             dest: dest.to_string(),
         }

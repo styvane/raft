@@ -6,6 +6,7 @@ use crate::event::Event;
 use crate::log::{Entry, Log};
 use crate::net::Node;
 use crate::types::{Index, Term};
+use std::cmp;
 use std::collections::HashMap;
 use std::fmt;
 
@@ -30,6 +31,9 @@ pub struct Server<N, V> {
     // Table of the log index to send to each peer.
     // It is initialize to leader's last log index + 1
     next_index: HashMap<String, usize>,
+
+    // Index of the highest log entry known to be replicated.
+    match_index: HashMap<String, Index>,
 }
 
 impl<N, V> fmt::Display for Server<N, V>
@@ -62,6 +66,7 @@ where
             vote_for: None,
             commit_index: None,
             next_index: HashMap::new(),
+            match_index: HashMap::new(),
         }
     }
 
@@ -89,6 +94,7 @@ where
             vote_for: None,
             commit_index: None,
             next_index,
+            match_index: HashMap::new(),
         }
     }
 
@@ -133,12 +139,18 @@ where
         };
 
         let entries = &self.log.entries[index..self.log.len()];
+
+        // Set the commit index the minimum value between the leader commit index
+        // and the index of the last log entry.
+        // See TLA⁺ spec L222
+        let commit_index = cmp::min(self.commit_index, self.log.previous_index());
+
         let msg = Event::new_append_entries(
             self.current_term,
             previous_index,
             previous_term,
             entries.to_vec(),
-            self.commit_index.clone(),
+            commit_index,
             self.node.get_id(),
             &peer,
         );
@@ -151,6 +163,7 @@ where
         if let Event::AppendEntries {
             previous_index,
             previous_term,
+            commit_index,
             entries,
             source,
             dest,
@@ -165,10 +178,20 @@ where
                 self.next_index.entry(source.clone()).and_modify(|x| {
                     *x += 1;
                 });
+
+                // Update self commit index to the minimum value between the leader commit index
+                // and the index of the last log entry.
+                // See TLA⁺ spec L222
+                if let Some(index) = commit_index {
+                    self.commit_index = cmp::min(self.log.previous_index(), Some(index));
+                }
             }
+
+            let match_index = self.log.previous_index();
             let resp = Event::new_append_entries_response(
                 self.current_term.clone(),
                 success,
+                match_index,
                 &dest,
                 &source,
             );
@@ -178,11 +201,22 @@ where
 
     fn handle_append_entries_response(&mut self, event: Event<V>) {
         if let Event::AppendEntriesResponse {
-            source, success, ..
+            source,
+            success,
+            match_index,
+            ..
         } = event
         {
             if success {
-                // TODO
+                // The next log to send is the log at the index immediately
+                // after match index.
+                // See TLA⁺ spec L395
+                self.next_index
+                    .insert(source.clone(), match_index.unwrap() + 1);
+
+                // Update match index.
+                // See TLA⁺ spec L396.
+                self.match_index.insert(source, match_index);
             } else {
                 // Decrement the next log index for this peer
                 // See TLA⁺ spec. 398
