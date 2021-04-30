@@ -2,11 +2,11 @@
 //!
 //! This module contains the Raft network node behavior.
 
-use crate::event::{Event, Message};
-use anyhow;
-use anyhow::Context as _;
-use std::collections::HashMap;
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use crate::event::Event;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::fmt;
+use std::rc::Rc;
 
 /// The `Node` trait defines a node behavior on the network.
 ///
@@ -16,33 +16,36 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 /// The `send` operation allows the node to send a message to it peers.
 /// The `receive` operation allows a node to receive a message from it peers.
 pub trait Node {
-    fn send(&mut self, message: Message) -> anyhow::Result<()>;
-    fn receive(&mut self) -> anyhow::Result<Event>;
-    fn peers(&self) -> &[String];
+    type EntryKind;
+
+    fn send(&mut self, dest: &str, event: Event<Self::EntryKind>);
+    fn receive(&mut self) -> Option<Event<Self::EntryKind>>;
+    fn peers(&self) -> Vec<String>;
+    fn get_id(&self) -> &str;
 }
 
 /// The type `FakeNetwork` is a fake network for testing and simulation.
-pub struct FakeNetwork {
+pub struct FakeNetwork<V> {
     size: usize,
-    members: HashMap<String, SyncSender<Event>>,
-    buf: Receiver<Message>,
-    node_sender: SyncSender<Message>,
+    members: HashMap<String, Rc<RefCell<VecDeque<Event<V>>>>>,
+    buf: Rc<RefCell<VecDeque<(String, Event<V>)>>>,
 }
 
-impl FakeNetwork {
+impl<V> FakeNetwork<V>
+where
+    V: fmt::Debug + Clone,
+{
     /// Create new fake network.
     pub fn new(size: usize) -> Self {
-        let (node_sender, buf) = sync_channel(100);
         Self {
             size,
             members: HashMap::new(),
-            buf,
-            node_sender,
+            buf: Rc::new(RefCell::new(VecDeque::new())),
         }
     }
 
     /// Create new node for the fake network.
-    pub fn new_node(&mut self, id: usize) -> FakeNode {
+    pub fn new_node(&mut self, id: usize) -> FakeNode<V> {
         assert!(id < self.size);
 
         let peers = (0..self.size)
@@ -50,49 +53,55 @@ impl FakeNetwork {
             .map(|x| x.to_string())
             .collect::<Vec<_>>();
 
-        let (tx, rx) = sync_channel(10);
-        self.members.insert(id.to_string(), tx);
+        let buf = Rc::new(RefCell::new(VecDeque::new()));
+        self.members.insert(id.to_string(), buf.clone());
 
         FakeNode {
             id: id.to_string(),
             peers,
-            messages: rx,
-            network: self.node_sender.clone(),
+            messages: buf,
+            network: self.buf.clone(),
         }
     }
 
-    /// Forward event to appropriate destination.
     pub fn forward(&mut self) {
-        if let Ok(msg) = self.buf.try_recv() {
-            if let Some(s) = self.members.get(&msg.destination()) {
-                s.try_send(msg.inner_event()).unwrap()
+        if let Some((dest, msg)) = self.buf.borrow_mut().pop_front() {
+            if let Some(s) = self.members.get(&dest) {
+                s.borrow_mut().push_back(msg);
             }
         }
     }
 }
 
 #[allow(dead_code)]
-pub struct FakeNode {
+pub struct FakeNode<V> {
     id: String,
     peers: Vec<String>,
-    messages: Receiver<Event>,
-    network: SyncSender<Message>,
+    pub messages: Rc<RefCell<VecDeque<Event<V>>>>,
+    network: Rc<RefCell<VecDeque<(String, Event<V>)>>>,
 }
 
-impl Node for FakeNode {
-    fn send(&mut self, message: Message) -> anyhow::Result<()> {
+impl<V> Node for FakeNode<V>
+where
+    V: fmt::Debug + Clone,
+{
+    type EntryKind = V;
+    fn send(&mut self, dest: &str, message: Event<V>) {
         self.network
-            .try_send(message)
-            .context("sending message failed")
-    }
-    fn receive(&mut self) -> anyhow::Result<Event> {
-        self.messages
-            .try_recv()
-            .context("no message or unable to read")
+            .borrow_mut()
+            .push_back((dest.to_string(), message));
     }
 
-    fn peers(&self) -> &[String] {
-        &self.peers
+    fn receive(&mut self) -> Option<Event<V>> {
+        self.messages.borrow_mut().pop_front()
+    }
+
+    fn peers(&self) -> Vec<String> {
+        self.peers.clone()
+    }
+
+    fn get_id(&self) -> &str {
+        &self.id
     }
 }
 
@@ -101,26 +110,20 @@ mod tests {
     use super::*;
     #[test]
     fn test_send_receive() {
-        let mut net = FakeNetwork::new(5);
+        let mut net: FakeNetwork<String> = FakeNetwork::new(5);
         let mut node0 = net.new_node(0);
         let mut node1 = net.new_node(1);
 
-        node0
-            .send(Message::new(
-                "1",
-                Event::AppendEntries {
-                    current_term: Some(1),
-                },
-            ))
-            .unwrap();
+        node0.send(
+            "1",
+            Event::new_append_entries(None, None, None, vec![], None, "0", "1"),
+        );
 
         net.forward();
 
         assert_eq!(
             node1.receive().unwrap(),
-            Event::AppendEntries {
-                current_term: Some(1)
-            }
+            Event::new_append_entries(None, None, None, vec![], None, "0", "1"),
         );
     }
 }
