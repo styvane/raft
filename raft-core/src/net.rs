@@ -24,12 +24,15 @@ pub trait Node {
     fn get_id(&self) -> &str;
 }
 
+type MemberBuffer<V> = Rc<RefCell<VecDeque<Event<V>>>>;
+type Buffer<V> = Rc<RefCell<VecDeque<(String, Event<V>)>>>;
+
 /// The type `FakeNetwork` is a fake network for testing and simulation.
 #[derive(Debug)]
 pub struct FakeNetwork<V> {
     size: usize,
-    members: HashMap<String, Rc<RefCell<VecDeque<Event<V>>>>>,
-    pub buf: Rc<RefCell<VecDeque<(String, Event<V>)>>>,
+    members: HashMap<String, MemberBuffer<V>>,
+    pub buf: Buffer<V>,
 }
 
 impl<V> FakeNetwork<V>
@@ -79,8 +82,8 @@ where
 pub struct FakeNode<V> {
     id: String,
     peers: Vec<String>,
-    pub messages: Rc<RefCell<VecDeque<Event<V>>>>,
-    network: Rc<RefCell<VecDeque<(String, Event<V>)>>>,
+    pub messages: MemberBuffer<V>,
+    network: Buffer<V>,
 }
 
 impl<V> Node for FakeNode<V>

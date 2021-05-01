@@ -21,11 +21,7 @@ impl Config {
             .map(|(_, v)| v)
             .collect();
 
-        Config {
-            id,
-            addr: String::from(addr),
-            peers,
-        }
+        Config { id, addr, peers }
     }
 
     pub(super) fn init() -> HashMap<usize, String> {

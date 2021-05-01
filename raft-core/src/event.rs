@@ -5,76 +5,91 @@ use crate::log::Entries;
 use crate::types::{Index, Term};
 use std::fmt;
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct AppendEntries<V> {
+    /// Leader's current term
+    pub term: Term,
+
+    /// Index of log entry immediately preceding new ones.
+    pub previous_index: Index,
+
+    /// Term of previous log index.
+    pub previous_term: Term,
+
+    /// Log entries to store (empty for heartbeat).
+    pub entries: Entries<V>,
+
+    /// Leader's commit index.
+    pub commit_index: Index,
+
+    /// Source of the entries
+    pub source: String,
+
+    /// Destination of the entries
+    pub dest: String,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct AppendEntriesResponse {
+    /// Current term for leader to update itself.
+    pub term: Term,
+
+    /// `true` if follower contained entry matching previous log index and previous term.
+    pub success: bool,
+
+    /// Index of the log that match with the leader.
+    pub match_index: Index,
+
+    /// Source of the response.
+    pub source: String,
+
+    /// Destination of the entries,
+    pub dest: String,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct RequestVote {
+    /// Candidate's term
+    pub term: Term,
+
+    /// Candidate requesting vote id.
+    pub candidate_id: String,
+
+    /// Index of candidate last log entry.
+    pub last_index: Index,
+
+    /// Term of candidate last log entry
+    pub last_term: Term,
+
+    /// Source of the entries
+    pub source: String,
+
+    /// Destination of the entries
+    pub dest: String,
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct RequestVoteResponse {
+    /// Current term for candidate to update itself.
+    pub term: Term,
+
+    /// `true` means the candidate received vote.
+    pub vote_granted: bool,
+
+    /// Source Id
+    pub source: String,
+
+    /// Destination Id
+    pub dest: String,
+}
+
 /// Event in the Raft system.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub enum Event<V> {
-    AppendEntries {
-        // Leader's current term
-        term: Term,
-
-        // Index of log entry immediately preceding new ones.
-        previous_index: Index,
-
-        // Term of previous log index.
-        previous_term: Term,
-
-        // Log entries to store (empty for heartbeat).
-        entries: Entries<V>,
-
-        // Leader's commit index.
-        commit_index: Index,
-
-        // Source Id
-        source: String,
-
-        // Destination Id
-        dest: String,
-    },
-    AppendEntriesResponse {
-        // Current term for leader to update itself.
-        term: Term,
-
-        // `true` if follower contained entry matching previous log
-        // index and previous term.
-        success: bool,
-
-        // Index of the log that match with the leader.
-        match_index: Index,
-        // Source Id
-        source: String,
-
-        // Destination Id
-        dest: String,
-    },
-
-    RequestVote {
-        // Candidate's term
-        term: Term,
-
-        // Candidate requesting vote id.
-        candidate_id: String,
-
-        // Index of candidate last log entry.
-        last_index: Index,
-
-        // Term of candidate last log entry
-        last_term: Term,
-        source: String,
-    },
-
-    RequestVoteResponse {
-        // Current term for candidate to update itself.
-        term: Term,
-
-        // `true` means the candidate received vote.
-        vote_granted: bool,
-
-        // Source Id
-        source: String,
-
-        // Destination Id
-        dest: String,
-    },
+    AppendEntries(AppendEntries<V>),
+    AppendEntriesResponse(AppendEntriesResponse),
+    RequestVote(RequestVote),
+    RequestVoteResponse(RequestVoteResponse),
 }
 
 impl<V> Event<V>
@@ -91,7 +106,7 @@ where
         source: &str,
         dest: &str,
     ) -> Self {
-        Self::AppendEntries {
+        Self::AppendEntries(AppendEntries {
             term,
             previous_index,
             previous_term,
@@ -99,7 +114,7 @@ where
             commit_index,
             source: source.to_string(),
             dest: dest.to_string(),
-        }
+        })
     }
 
     /// Create new `Append_EntriesResponse` event.
@@ -110,13 +125,13 @@ where
         source: &str,
         dest: &str,
     ) -> Self {
-        Self::AppendEntriesResponse {
+        Self::AppendEntriesResponse(AppendEntriesResponse {
             term,
             success,
             match_index,
             source: source.to_string(),
             dest: dest.to_string(),
-        }
+        })
     }
 
     /// Create new `RequestVote` event.
@@ -126,14 +141,16 @@ where
         last_index: Index,
         last_term: Term,
         source: &str,
+        dest: &str,
     ) -> Self {
-        Self::RequestVote {
+        Self::RequestVote(RequestVote {
             term,
             candidate_id,
             last_index,
             last_term,
             source: source.to_string(),
-        }
+            dest: dest.to_string(),
+        })
     }
 
     /// Create new `RequestVoteResponse` event.
@@ -143,11 +160,11 @@ where
         source: &str,
         dest: &str,
     ) -> Self {
-        Self::RequestVoteResponse {
+        Self::RequestVoteResponse(RequestVoteResponse {
             term,
             vote_granted,
             source: source.to_string(),
             dest: dest.to_string(),
-        }
+        })
     }
 }

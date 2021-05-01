@@ -2,7 +2,7 @@
 //!
 //! This module contains the Raft server implementation.
 
-use crate::event::Event;
+use crate::event::{AppendEntries, AppendEntriesResponse, Event, RequestVote, RequestVoteResponse};
 use crate::log::{Entry, Log};
 use crate::net::Node;
 use crate::types::{Index, Term};
@@ -67,7 +67,7 @@ where
     pub fn new(node: N) -> Self {
         Server {
             node,
-            log: Log::<V>::new(),
+            log: Log::<V>::default(),
             current_term: None,
             vote_for: None,
             commit_index: None,
@@ -101,7 +101,7 @@ where
         // See TLA⁺ spec L229.
         assert!(
             self.role == Role::Candidate,
-            "Only candidate can become leader after wining an election"
+            "Only candidate can become leader after winning an election"
         );
 
         self.role = Role::Leader;
@@ -136,7 +136,7 @@ where
     pub fn handle_client(&mut self, data: V) {
         let mut entry = Vec::with_capacity(1);
         let current_term = if let Some(ref term) = self.current_term {
-            term.clone()
+            *term
         } else {
             1
         };
@@ -150,6 +150,7 @@ where
         }
     }
 
+    /// Send AppendEntries RPC to all peers.
     fn send_all_peers_append_entries(&mut self) {
         for peer in self.node.peers() {
             self.send_append_entries(&peer);
@@ -169,7 +170,7 @@ where
         let previous_term = if index == 0 {
             None
         } else {
-            Some(self.log.entries[index].term.clone())
+            Some(self.log.entries[index].term)
         };
 
         let entries = &self.log.entries[index..self.log.len()];
@@ -193,13 +194,13 @@ where
     }
 
     /// Handle AppendEntries request from the leader.
-    fn handle_append_entries_request(&mut self, event: Event<V>) {
+    fn handle_append_entries_request(&mut self, request: AppendEntries<V>) {
         // The leader should ignore any received AppendEntries RPC call.
         if self.role == Role::Leader {
             return;
         }
 
-        if let Event::AppendEntries {
+        let AppendEntries {
             previous_index,
             previous_term,
             commit_index,
@@ -207,99 +208,107 @@ where
             source,
             dest,
             ..
-        } = event
-        {
-            let success = self
-                .log
-                .append_entries(previous_index, previous_term, &entries);
+        } = request;
 
-            if success {
-                self.next_index.entry(source.clone()).and_modify(|x| {
-                    *x += 1;
-                });
+        let success = self
+            .log
+            .append_entries(previous_index, previous_term, &entries);
 
-                // Update self commit index to the minimum value between the leader commit index
-                // and the index of the last log entry.
-                // See TLA⁺ spec L222
-                if let Some(index) = commit_index {
-                    self.commit_index = cmp::min(self.log.previous_index(), Some(index));
-                }
-                if self.commit_index > self.last_applied {
-                    // Apply log to the state machine
-                    // ....
+        if success {
+            self.next_index.entry(source.clone()).and_modify(|x| {
+                *x += 1;
+            });
 
-                    // Update index of last log applied.
-                    self.last_applied = self.commit_index.clone();
-                }
+            // Update self commit index to the minimum value between the leader commit index
+            // and the index of the last log entry.
+            // See TLA⁺ spec L222
+            if let Some(index) = commit_index {
+                self.commit_index = cmp::min(self.log.previous_index(), Some(index));
             }
+            if self.commit_index > self.last_applied {
+                // Apply log to the state machine
+                // ....
 
-            let match_index = self.log.previous_index();
-            let resp = Event::new_append_entries_response(
-                self.current_term.clone(),
-                success,
-                match_index,
-                &dest,
-                &source,
-            );
-            self.node.send(&source, resp);
+                // Update index of last log applied.
+                self.last_applied = self.commit_index;
+            }
         }
+
+        let match_index = self.log.previous_index();
+        let resp = Event::new_append_entries_response(
+            self.current_term,
+            success,
+            match_index,
+            &dest,
+            &source,
+        );
+        self.node.send(&source, resp);
     }
 
     /// Handle AppendEntries RPC response from a server.
-    fn handle_append_entries_response(&mut self, event: Event<V>) {
-        if let Event::AppendEntriesResponse {
+    fn handle_append_entries_response(&mut self, response: AppendEntriesResponse) {
+        let AppendEntriesResponse {
             source,
             success,
             match_index,
             ..
-        } = event
-        {
-            if success {
-                // The next log to send is the log at the index immediately
-                // after match index.
-                // See TLA⁺ spec L395
-                self.next_index
-                    .insert(source.clone(), match_index.unwrap() + 1);
+        } = response;
 
-                // Update match index.
-                // See TLA⁺ spec L396.
-                self.match_index.insert(source, match_index);
+        if success {
+            // The next log to send is the log at the index immediately
+            // after match index.
+            // See TLA⁺ spec L395
+            self.next_index
+                .insert(source.clone(), match_index.unwrap() + 1);
 
-                // Check whether a consensus has been reached.
-                // In which case, the new commit index is the median high of the
-                // match index values.
-                let mut sorted_match = self.match_index.values().collect::<Vec<_>>();
-                sorted_match.sort();
-                if let Some(index) = sorted_match.into_iter().nth(self.match_index.len() / 2) {
-                    self.commit_index = *index;
-                }
+            // Update match index.
+            // See TLA⁺ spec L396.
+            self.match_index.insert(source, match_index);
 
-                if self.commit_index > self.last_applied {
-                    // Do application request
-
-                    // Update last applied index.
-                    self.last_applied = self.commit_index.clone();
-                }
-            } else {
-                // Decrement the next log index for this peer when the AppendEntries
-                // consistency check failed.
-                // See TLA⁺ spec. 398
-                self.next_index.entry(source.clone()).and_modify(|x| {
-                    if *x > 0 {
-                        *x -= 1;
-                    }
-                });
-                // Retry the RPC for this peer.
-                self.send_append_entries(&source);
+            // Check whether a consensus has been reached.
+            // In which case, the new commit index is the median high of the
+            // match index values.
+            let mut sorted_match = self.match_index.values().collect::<Vec<_>>();
+            sorted_match.sort();
+            if let Some(index) = sorted_match.into_iter().nth(self.match_index.len() / 2) {
+                self.commit_index = *index;
             }
+
+            if self.commit_index > self.last_applied {
+                // Do application request
+
+                // Update last applied index.
+                self.last_applied = self.commit_index;
+            }
+        } else {
+            // Decrement the next log index for this peer when the AppendEntries
+            // consistency check failed.
+            // See TLA⁺ spec. 398
+            self.next_index.entry(source.clone()).and_modify(|x| {
+                if *x > 0 {
+                    *x -= 1;
+                }
+            });
+            // Retry the RPC for this peer.
+            self.send_append_entries(&source);
         }
     }
+
+    /// Handle a request vote from a candidate.
+    pub fn handle_request_vote(&mut self, request: RequestVote) {
+        if self.role == Role::Leader {}
+    }
+
+    /// Handle a request vote response from a peer.
+    pub fn handle_request_vote_response(&mut self, response: RequestVoteResponse) {}
 
     /// Handle events in the server.
     pub fn handle(&mut self, event: Event<V>) {
         match event {
-            Event::AppendEntries { .. } => self.handle_append_entries_request(event),
-            Event::AppendEntriesResponse { .. } => self.handle_append_entries_response(event),
+            Event::AppendEntries(event_kind) => self.handle_append_entries_request(event_kind),
+            Event::AppendEntriesResponse(event_kind) => {
+                self.handle_append_entries_response(event_kind)
+            }
             _ => (),
         };
     }

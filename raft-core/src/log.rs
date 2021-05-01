@@ -24,14 +24,15 @@ pub struct Log<V> {
     pub(crate) entries: Vec<Entry<V>>,
 }
 
-use std::fmt;
-impl<V: Clone + fmt::Debug> Log<V> {
-    pub fn new() -> Self {
+impl<V> Default for Log<V> {
+    fn default() -> Self {
         Log {
             entries: Vec::new(),
         }
     }
-
+}
+use std::fmt;
+impl<V: Clone + fmt::Debug> Log<V> {
     /// Create a log from existing entries.
     ///
     /// This shoud be use for testing purpose only.
@@ -49,7 +50,7 @@ impl<V: Clone + fmt::Debug> Log<V> {
 
     /// Return previous log entry index.
     pub fn previous_index(&self) -> Index {
-        if self.len() >= 1 {
+        if !self.is_empty() {
             Some(self.len() - 1)
         } else {
             None
@@ -124,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_append_entries() {
-        let mut log = Log::new();
+        let mut log = Log::default();
         assert!(
             log.append_entries(None, None, &[Entry::new(1, 'x')]),
             "append entries failed on empty log"
