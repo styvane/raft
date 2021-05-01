@@ -20,6 +20,7 @@ pub trait Node {
     fn get_id(&self) -> &str;
 }
 
+#[allow(dead_code)]
 pub mod testing {
     use super::Node;
     use crate::event::Event;
@@ -81,7 +82,6 @@ pub mod testing {
         }
     }
 
-    #[allow(dead_code)]
     #[derive(Debug)]
     pub struct FakeNode<V> {
         id: String,
