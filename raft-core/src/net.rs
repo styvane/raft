@@ -20,7 +20,7 @@ pub trait Node {
     fn get_id(&self) -> &str;
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod testing {
     use super::Node;
     use crate::event::Event;
