@@ -302,14 +302,13 @@ where
     /// Handle a request vote response from a peer.
     pub fn handle_request_vote_response(&mut self, response: RequestVoteResponse) {}
 
-    /// Handle events in the server.
+    /// Handle all possible normal events in the server.
     pub fn handle(&mut self, event: Event<V>) {
         match event {
-            Event::AppendEntries(event_kind) => self.handle_append_entries_request(event_kind),
-            Event::AppendEntriesResponse(event_kind) => {
-                self.handle_append_entries_response(event_kind)
-            }
-            _ => (),
+            Event::AppendEntries(event) => self.handle_append_entries_request(event),
+            Event::AppendEntriesResponse(event) => self.handle_append_entries_response(event),
+            Event::RequestVote(event) => self.handle_request_vote(event),
+            Event::RequestVoteResponse(event) => self.handle_request_vote_response(event),
         };
     }
 }
@@ -325,7 +324,7 @@ enum Role {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::net::{FakeNetwork, FakeNode};
+    use crate::net::testing::{FakeNetwork, FakeNode};
 
     fn process_events(servers: &mut [Server<FakeNode<char>, char>], net: &mut FakeNetwork<char>) {
         loop {
