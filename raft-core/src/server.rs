@@ -34,6 +34,12 @@ pub struct Server<N, V> {
 
     // Index of the highest log entry known to be replicated.
     match_index: HashMap<String, Index>,
+
+    // Role of the server.
+    role: Role,
+
+    // Index of the last log applied to the state machine.
+    last_applied: Index,
 }
 
 impl<N, V> fmt::Display for Server<N, V>
@@ -67,19 +73,9 @@ where
             commit_index: None,
             next_index: HashMap::new(),
             match_index: HashMap::new(),
+            role: Role::Follower,
+            last_applied: None,
         }
-    }
-
-    /// Reset some internal state after winning an election.
-    pub fn become_leader(&mut self) {
-        // Leader initializes all the next index for each follower.
-        // See TLA⁺ spec L232
-        self.next_index = self
-            .node
-            .peers()
-            .iter()
-            .map(|x| (x.clone(), self.log.len()))
-            .collect();
     }
 
     /// Create new Raft server with a existing log.
@@ -95,10 +91,48 @@ where
             commit_index: None,
             next_index,
             match_index: HashMap::new(),
+            role: Role::Follower,
+            last_applied: None,
         }
     }
 
-    /// Accept client request.
+    /// Reset some internal state after winning an election.
+    pub fn become_leader(&mut self) {
+        // See TLA⁺ spec L229.
+        assert!(
+            self.role == Role::Candidate,
+            "Only candidate can become leader after wining an election"
+        );
+
+        self.role = Role::Leader;
+        // Leader initializes all the next index for each follower.
+        // See TLA⁺ spec L232
+        self.next_index = self
+            .node
+            .peers()
+            .iter()
+            .map(|x| (x.clone(), self.log.len()))
+            .collect();
+    }
+
+    /// Become a candidate when the server has not received any heartbeat.
+    pub fn become_candidate(&mut self) {
+        // Only followers and candidate are allowed to start new election.
+        assert!(
+            self.role == Role::Follower || self.role == Role::Candidate,
+            "leader should never became candidate or follower"
+        );
+
+        // After becoming a candidate, increase self current term.
+        // See TLA⁺ spec.
+        self.current_term
+            .replace(self.current_term.map_or_else(|| 1, |t| t + 1));
+
+        self.role = Role::Candidate;
+        // Vote for self
+    }
+
+    /// Handle client requests.
     pub fn handle_client(&mut self, data: V) {
         let mut entry = Vec::with_capacity(1);
         let current_term = if let Some(ref term) = self.current_term {
@@ -140,7 +174,7 @@ where
 
         let entries = &self.log.entries[index..self.log.len()];
 
-        // Set the commit index the minimum value between the leader commit index
+        // Set the commit index the minimum value between self commit index
         // and the index of the last log entry.
         // See TLA⁺ spec L222
         let commit_index = cmp::min(self.commit_index, self.log.previous_index());
@@ -158,8 +192,13 @@ where
         self.node.send(&peer, msg);
     }
 
-    /// Handle AppendEntries response.
+    /// Handle AppendEntries request from the leader.
     fn handle_append_entries_request(&mut self, event: Event<V>) {
+        // The leader should ignore any received AppendEntries RPC call.
+        if self.role == Role::Leader {
+            return;
+        }
+
         if let Event::AppendEntries {
             previous_index,
             previous_term,
@@ -185,6 +224,13 @@ where
                 if let Some(index) = commit_index {
                     self.commit_index = cmp::min(self.log.previous_index(), Some(index));
                 }
+                if self.commit_index > self.last_applied {
+                    // Apply log to the state machine
+                    // ....
+
+                    // Update index of last log applied.
+                    self.last_applied = self.commit_index.clone();
+                }
             }
 
             let match_index = self.log.previous_index();
@@ -199,6 +245,7 @@ where
         }
     }
 
+    /// Handle AppendEntries RPC response from a server.
     fn handle_append_entries_response(&mut self, event: Event<V>) {
         if let Event::AppendEntriesResponse {
             source,
@@ -217,8 +264,25 @@ where
                 // Update match index.
                 // See TLA⁺ spec L396.
                 self.match_index.insert(source, match_index);
+
+                // Check whether a consensus has been reached.
+                // In which case, the new commit index is the median high of the
+                // match index values.
+                let mut sorted_match = self.match_index.values().collect::<Vec<_>>();
+                sorted_match.sort();
+                if let Some(index) = sorted_match.into_iter().nth(self.match_index.len() / 2) {
+                    self.commit_index = *index;
+                }
+
+                if self.commit_index > self.last_applied {
+                    // Do application request
+
+                    // Update last applied index.
+                    self.last_applied = self.commit_index.clone();
+                }
             } else {
-                // Decrement the next log index for this peer
+                // Decrement the next log index for this peer when the AppendEntries
+                // consistency check failed.
                 // See TLA⁺ spec. 398
                 self.next_index.entry(source.clone()).and_modify(|x| {
                     if *x > 0 {
@@ -239,6 +303,14 @@ where
             _ => (),
         };
     }
+}
+
+/// The `Role` enumerates the possible roles of a server.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Role {
+    Leader,
+    Candidate,
+    Follower,
 }
 
 #[cfg(test)]
@@ -281,7 +353,9 @@ mod tests {
         let (mut net, mut servers) = create_servers();
         {
             let srv0 = &mut servers[0];
+            srv0.become_candidate();
             srv0.become_leader();
+
             srv0.handle_client('m');
         }
 
@@ -292,6 +366,66 @@ mod tests {
                 servers[0].log.entries,
                 srv.log.entries,
                 "srv{} log does not match leader",
+                srv.node.get_id()
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_become_leader() {
+        let mut net = FakeNetwork::<()>::new(1);
+        let node = net.new_node(0);
+        let mut srv = Server::new(node);
+        srv.become_leader();
+    }
+
+    #[test]
+    fn test_become_candidate() {
+        let mut net = FakeNetwork::<()>::new(1);
+        let node = net.new_node(0);
+        let mut srv = Server::new(node);
+        srv.become_candidate();
+        srv.become_candidate();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_leader_cannot_become_candidate() {
+        let mut net = FakeNetwork::<()>::new(1);
+        let node = net.new_node(0);
+        let mut srv = Server::new(node);
+        srv.role = Role::Leader;
+        srv.become_candidate();
+    }
+
+    #[test]
+    fn test_consensus_log_replication_paper_fig7() {
+        let (mut net, mut servers) = create_servers();
+        {
+            let srv0 = &mut servers[0];
+            srv0.become_candidate();
+            srv0.become_leader();
+            srv0.handle_client('m');
+        }
+
+        process_events(&mut servers, &mut net);
+
+        assert_eq!(servers[0].last_applied, Some(11));
+
+        {
+            let srv0 = &mut servers[0];
+            srv0.handle_client('m');
+        }
+
+        process_events(&mut servers, &mut net);
+        assert_eq!(servers[0].last_applied, Some(12));
+        for srv in servers[1..7].iter() {
+            assert_eq!(
+                srv.last_applied,
+                Some(11),
+                "expected last applied Some(11) found {:?} for srv{}",
+                srv.last_applied,
                 srv.node.get_id()
             );
         }
