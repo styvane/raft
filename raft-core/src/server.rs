@@ -55,9 +55,13 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "Server<id={}, term={:?}, log={:?}>",
+            "Server<id={}, term={:?}, role={},  vote_for={}, log={:?}>",
             self.node.get_id(),
             self.current_term,
+            self.role,
+            self.vote_for
+                .clone()
+                .unwrap_or_else(|| String::from("None")),
             self.log
         )
     }
@@ -124,6 +128,12 @@ where
             .iter()
             .map(|x| (x.clone(), self.log.len()))
             .collect();
+
+        // Once elected, the self must commit a new entry to it log.
+        // It also needs to send send appendEntries to followers.
+        self.log
+            .append_entries(self.log.previous_index(), self.log.previous_term(), &[]);
+        self.broadcast_append_entries();
     }
 
     /// This method change the server's role to [`Role::Candidate`].
@@ -189,14 +199,11 @@ where
 
         let index = self.next_index[peer];
 
-        // See TLA⁺ spec. L206
-        let previous_index = if index == 0 { None } else { Some(index - 1) };
-
-        // See TLA⁺ spec. L207-L210
-        let previous_term = if index == 0 {
-            None
+        // See TLA⁺ spec. L206-210
+        let (previous_index, previous_term) = if index == 0 {
+            (None, None)
         } else {
-            Some(self.log.entries[index].term)
+            (Some(index - 1), Some(self.log.entries[index - 1].term))
         };
 
         let entries = &self.log.entries[index..self.log.len()];
@@ -243,10 +250,6 @@ where
             .append_entries(previous_index, previous_term, &entries);
 
         if success {
-            self.next_index.entry(source.clone()).and_modify(|x| {
-                *x += 1;
-            });
-
             // Update self commit index to the minimum value between the leader commit index
             // and the index of the last log entry.
             // See TLA⁺ spec L222
@@ -431,6 +434,18 @@ enum Role {
     Follower,
 }
 
+impl fmt::Display for Role {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let role = match self {
+            Role::Candidate => "Candidate",
+            Role::Follower => "Follower",
+            Role::Leader => "Leader",
+        };
+
+        write!(f, "{}", role)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,13 +598,15 @@ mod tests {
         assert_eq!(servers[0].votes.get("4").unwrap().granted, false);
         assert_eq!(servers[0].votes.get("5").unwrap().granted, true);
         assert_eq!(servers[0].votes.get("6").unwrap().granted, true);
-        servers[0].role = Role::Follower;
+    }
 
+    #[test]
+    fn test_server2_cannot_become_leader_paper_fig7() {
+        let (mut net, mut servers) = create_servers();
         {
             let srv2 = &mut servers[2];
             srv2.become_candidate();
         }
-
         process_events(&mut servers, &mut net);
 
         assert_eq!(servers[2].votes.get("0").unwrap().granted, false);
@@ -600,7 +617,11 @@ mod tests {
         assert_eq!(servers[2].votes.get("5").unwrap().granted, false);
         assert_eq!(servers[2].votes.get("6").unwrap().granted, true);
 
-        assert_eq!(servers[2].role, Role::Candidate);
+        assert_eq!(
+            servers[2].role,
+            Role::Follower,
+            "server2 should have gone back to follower"
+        );
     }
 
     fn setup_logs_scenario_paper_fig7() -> Vec<Log<char>> {
