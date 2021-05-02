@@ -9,7 +9,7 @@ use crate::log::{Entry, Log};
 use crate::net::Node;
 use crate::types::{Index, Term};
 use std::cmp;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// The type `Server` is the raft server.
@@ -45,6 +45,12 @@ pub struct Server<N, V> {
 
     // List of votes recorded,
     votes: HashMap<String, Vote>,
+
+    // Hartbeat from followers
+    followers_hartbeat: HashSet<String>,
+
+    // Indicate whether is hartbeat was received from leader.
+    leader_hartbeat_is_received: bool,
 }
 
 impl<N, V> fmt::Display for Server<N, V>
@@ -74,17 +80,20 @@ where
 {
     /// Create new Raft server.
     pub fn new(node: N) -> Self {
+        let size = node.peers().len();
         Server {
             node,
             log: Log::<V>::default(),
             current_term: None,
             vote_for: None,
             commit_index: None,
-            next_index: HashMap::new(),
-            match_index: HashMap::new(),
+            next_index: HashMap::with_capacity(size),
+            match_index: HashMap::with_capacity(size),
             role: Role::Follower,
             last_applied: None,
-            votes: HashMap::new(),
+            votes: HashMap::with_capacity(size),
+            followers_hartbeat: HashSet::with_capacity(size),
+            leader_hartbeat_is_received: false,
         }
     }
 
@@ -93,6 +102,7 @@ where
         let next_index: HashMap<String, usize> =
             node.peers().iter().map(|x| (x.clone(), 0)).collect();
 
+        let size = node.peers().len();
         Server {
             node,
             log,
@@ -100,10 +110,12 @@ where
             vote_for: None,
             commit_index: None,
             next_index,
-            match_index: HashMap::new(),
+            match_index: HashMap::with_capacity(size),
             role: Role::Follower,
             last_applied: None,
-            votes: HashMap::new(),
+            votes: HashMap::with_capacity(size),
+            followers_hartbeat: HashSet::with_capacity(size),
+            leader_hartbeat_is_received: false,
         }
     }
 
@@ -138,7 +150,7 @@ where
 
     /// This method change the server's role to [`Role::Candidate`].
     ///
-    /// When the server has not received any heartbeat during a certain period,
+    /// When the server has not received any hartbeat during a certain period,
     /// it starts an election by sending a vote request to it peers.
     pub fn become_candidate(&mut self) {
         // Only followers and candidate are allowed to start new election.
@@ -161,6 +173,22 @@ where
 
         // Send request vote to all.
         self.broadcast_request_vote();
+    }
+
+    /// Send hartbeat to followers if self is a leader.
+    pub fn send_leader_hartbeat(&mut self) {
+        if self.role == Role::Leader {
+            self.followers_hartbeat.clear();
+            self.broadcast_append_entries();
+        }
+    }
+
+    /// Start a new election
+    pub fn election_timeout(&mut self) {
+        if self.role != Role::Leader && !self.leader_hartbeat_is_received {
+            self.become_candidate();
+            self.leader_hartbeat_is_received = false;
+        }
     }
 
     /// This method changes the role to `Role::Follower.
@@ -244,6 +272,7 @@ where
         } = request;
 
         self.update_term(term);
+        self.leader_hartbeat_is_received = true;
 
         let success = self
             .log
@@ -284,6 +313,9 @@ where
             match_index,
             ..
         } = response;
+
+        // Record hartbeat for this follower.
+        self.followers_hartbeat.insert(source.clone());
 
         if success {
             // The next log to send is the log at the index immediately
@@ -622,6 +654,105 @@ mod tests {
             Role::Follower,
             "server2 should have gone back to follower"
         );
+    }
+
+    #[test]
+    fn test_hartbeat_paper_fig7() {
+        let (mut net, mut servers) = create_servers();
+        for srv in servers[..].iter() {
+            assert!(!srv.leader_hartbeat_is_received);
+        }
+
+        assert!(servers[0].followers_hartbeat.is_empty());
+
+        {
+            let srv0 = &mut servers[0];
+            srv0.election_timeout();
+        }
+
+        process_events(&mut servers, &mut net);
+
+        for srv in servers[1..].iter() {
+            assert!(srv.leader_hartbeat_is_received);
+            assert!(servers[0].followers_hartbeat.contains(srv.node.get_id()));
+        }
+    }
+
+    #[test]
+    fn test_election_timeout_paper_fig7() {
+        let (mut net, mut servers) = create_servers();
+        for srv in servers[..].iter() {
+            assert!(!srv.leader_hartbeat_is_received);
+        }
+
+        assert!(servers[0].followers_hartbeat.is_empty());
+
+        {
+            let srv0 = &mut servers[0];
+            srv0.election_timeout();
+        }
+
+        {
+            let srv2 = &mut servers[2];
+            srv2.election_timeout();
+        }
+
+        assert_eq!(servers[0].role, Role::Candidate);
+        assert_eq!(servers[0].current_term, Some(9));
+        assert_eq!(servers[2].role, Role::Candidate);
+        assert_eq!(servers[2].current_term, Some(5));
+
+        {
+            let srv0 = &mut servers[0];
+            srv0.election_timeout();
+        }
+
+        {
+            let srv2 = &mut servers[2];
+            srv2.election_timeout();
+        }
+
+        assert_eq!(servers[0].role, Role::Candidate);
+        assert_eq!(servers[0].current_term, Some(10));
+        assert_eq!(servers[2].role, Role::Candidate);
+        assert_eq!(servers[2].current_term, Some(6));
+
+        process_events(&mut servers, &mut net);
+        assert_eq!(servers[0].role, Role::Leader);
+        assert_eq!(servers[2].role, Role::Follower);
+    }
+
+    #[test]
+    fn test_received_hartbeat_during_election_paper_fig7() {
+        let (mut net, mut servers) = create_servers();
+        for srv in servers[..].iter() {
+            assert!(!srv.leader_hartbeat_is_received);
+        }
+
+        assert!(servers[0].followers_hartbeat.is_empty());
+
+        {
+            let srv0 = &mut servers[0];
+            srv0.election_timeout();
+        }
+
+        {
+            let srv2 = &mut servers[2];
+            srv2.election_timeout();
+        }
+
+        assert_eq!(servers[0].role, Role::Candidate);
+        assert_eq!(servers[0].current_term, Some(9));
+        assert_eq!(servers[2].role, Role::Candidate);
+        assert_eq!(servers[2].current_term, Some(5));
+        {
+            let srv0 = &mut servers[0];
+            srv0.handle_client('m');
+        }
+
+        process_events(&mut servers, &mut net);
+        assert_eq!(servers[0].role, Role::Leader);
+        assert_eq!(servers[2].role, Role::Follower);
     }
 
     fn setup_logs_scenario_paper_fig7() -> Vec<Log<char>> {
