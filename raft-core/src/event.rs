@@ -47,13 +47,34 @@ pub struct AppendEntriesResponse {
     pub dest: String,
 }
 
+/// The `Vote` type owns a vote casted by a peer.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct Vote {
+    pub peer: String,
+
+    /// `true` means the candidate received vote.
+    pub granted: bool,
+}
+
+impl Vote {
+    /// Cast new vote
+    pub fn cast(peer: &str) -> Self {
+        Vote {
+            peer: peer.to_string(),
+            granted: true,
+        }
+    }
+
+    /// Un-grant vote to peer
+    pub fn remove(&mut self) {
+        self.granted = false;
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
 pub struct RequestVote {
     /// Candidate's term
     pub term: Term,
-
-    /// Candidate requesting vote id.
-    pub candidate_id: String,
 
     /// Index of candidate last log entry.
     pub last_index: Index,
@@ -73,8 +94,8 @@ pub struct RequestVoteResponse {
     /// Current term for candidate to update itself.
     pub term: Term,
 
-    /// `true` means the candidate received vote.
-    pub vote_granted: bool,
+    /// Vote casted.
+    pub vote: Vote,
 
     /// Source Id
     pub source: String,
@@ -137,7 +158,6 @@ where
     /// Create new `RequestVote` event.
     pub fn new_request_vote(
         term: Term,
-        candidate_id: String,
         last_index: Index,
         last_term: Term,
         source: &str,
@@ -145,7 +165,6 @@ where
     ) -> Self {
         Self::RequestVote(RequestVote {
             term,
-            candidate_id,
             last_index,
             last_term,
             source: source.to_string(),
@@ -154,15 +173,10 @@ where
     }
 
     /// Create new `RequestVoteResponse` event.
-    pub fn new_request_vote_response(
-        term: Term,
-        vote_granted: bool,
-        source: &str,
-        dest: &str,
-    ) -> Self {
+    pub fn new_request_vote_response(term: Term, vote: Vote, source: &str, dest: &str) -> Self {
         Self::RequestVoteResponse(RequestVoteResponse {
             term,
-            vote_granted,
+            vote,
             source: source.to_string(),
             dest: dest.to_string(),
         })

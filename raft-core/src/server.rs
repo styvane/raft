@@ -2,7 +2,9 @@
 //!
 //! This module contains the Raft server implementation.
 
-use crate::event::{AppendEntries, AppendEntriesResponse, Event, RequestVote, RequestVoteResponse};
+use crate::event::{
+    AppendEntries, AppendEntriesResponse, Event, RequestVote, RequestVoteResponse, Vote,
+};
 use crate::log::{Entry, Log};
 use crate::net::Node;
 use crate::types::{Index, Term};
@@ -40,6 +42,9 @@ pub struct Server<N, V> {
 
     // Index of the last log applied to the state machine.
     last_applied: Index,
+
+    // List of votes recorded,
+    votes: HashMap<String, Vote>,
 }
 
 impl<N, V> fmt::Display for Server<N, V>
@@ -75,6 +80,7 @@ where
             match_index: HashMap::new(),
             role: Role::Follower,
             last_applied: None,
+            votes: HashMap::new(),
         }
     }
 
@@ -93,11 +99,16 @@ where
             match_index: HashMap::new(),
             role: Role::Follower,
             last_applied: None,
+            votes: HashMap::new(),
         }
     }
 
     /// Reset some internal state after winning an election.
     pub fn become_leader(&mut self) {
+        if self.role == Role::Leader {
+            return;
+        }
+
         // See TLA⁺ spec L229.
         assert!(
             self.role == Role::Candidate,
@@ -115,7 +126,10 @@ where
             .collect();
     }
 
-    /// Become a candidate when the server has not received any heartbeat.
+    /// This method change the server's role to [`Role::Candidate`].
+    ///
+    /// When the server has not received any heartbeat during a certain period,
+    /// it starts an election by sending a vote request to it peers.
     pub fn become_candidate(&mut self) {
         // Only followers and candidate are allowed to start new election.
         assert!(
@@ -130,6 +144,18 @@ where
 
         self.role = Role::Candidate;
         // Vote for self
+        self.votes.insert(
+            self.node.get_id().to_string(),
+            Vote::cast(self.node.get_id()),
+        );
+
+        // Send request vote to all.
+        self.broadcast_request_vote();
+    }
+
+    /// This method changes the role to `Role::Follower.
+    fn become_follower(&mut self) {
+        self.role = Role::Follower;
     }
 
     /// Handle client requests.
@@ -146,18 +172,18 @@ where
             self.log
                 .append_entries(self.log.previous_index(), self.log.previous_term(), &entry);
         if success {
-            self.send_all_peers_append_entries();
+            self.broadcast_append_entries();
         }
     }
 
     /// Send AppendEntries RPC to all peers.
-    fn send_all_peers_append_entries(&mut self) {
+    fn broadcast_append_entries(&mut self) {
         for peer in self.node.peers() {
             self.send_append_entries(&peer);
         }
     }
 
-    /// Send AppendEntries RPC to followers
+    /// Send AppendEntries RPC a follower.
     fn send_append_entries(&mut self, peer: &str) {
         // Get the previous log entry for this peer.
 
@@ -201,14 +227,16 @@ where
         }
 
         let AppendEntries {
+            term,
             previous_index,
             previous_term,
             commit_index,
             entries,
             source,
             dest,
-            ..
         } = request;
+
+        self.update_term(term);
 
         let success = self
             .log
@@ -294,13 +322,86 @@ where
         }
     }
 
+    /// Send a vote request to all peers.
+    pub fn broadcast_request_vote(&mut self) {
+        for peer in self.node.peers() {
+            if !self.votes.contains_key(&peer) {
+                let event: Event<V> = Event::new_request_vote(
+                    self.current_term,
+                    self.log.previous_index(),
+                    self.log.previous_term(),
+                    self.node.get_id(),
+                    &peer,
+                );
+
+                self.node.send(&peer, event);
+            }
+        }
+    }
+
     /// Handle a request vote from a candidate.
     pub fn handle_request_vote(&mut self, request: RequestVote) {
-        if self.role == Role::Leader {}
+        let RequestVote {
+            term,
+            last_index,
+            last_term,
+            source,
+            dest,
+        } = request;
+
+        self.update_term(term);
+
+        let mut vote = Vote::cast(&source);
+
+        // See TLA⁺ spec L284
+        if self.current_term > term {
+            vote.remove();
+        }
+
+        // See TLA⁺ spec L285-L286
+        if self.log.previous_term() > last_term
+            || self.log.previous_term() == last_term && self.log.previous_index() > last_index
+        {
+            vote.remove();
+        }
+
+        // Set the peer self has voted for.
+        // See TLA+ spec 291.
+        if vote.granted {
+            self.vote_for = Some(source.clone());
+        }
+
+        let resp: Event<V> =
+            Event::new_request_vote_response(self.current_term, vote, &dest, &source);
+
+        self.node.send(&source, resp);
     }
 
     /// Handle a request vote response from a peer.
-    pub fn handle_request_vote_response(&mut self, response: RequestVoteResponse) {}
+    pub fn handle_request_vote_response(&mut self, response: RequestVoteResponse) {
+        let RequestVoteResponse {
+            term, vote, source, ..
+        } = response;
+
+        self.update_term(term);
+
+        // Ignore the response if its from a leader.
+        if term > self.current_term {
+            return;
+        }
+        self.votes.insert(source, vote);
+        let granted: Vec<_> = self
+            .votes
+            .values()
+            .map(|x| x.granted)
+            .filter(|&x| x)
+            .collect();
+
+        // If self has a majory of votes then it becomes a leader.
+        if granted.len() > self.votes.len() / 2 {
+            self.become_leader();
+        }
+    }
 
     /// Handle all possible normal events in the server.
     pub fn handle(&mut self, event: Event<V>) {
@@ -311,9 +412,18 @@ where
             Event::RequestVoteResponse(event) => self.handle_request_vote_response(event),
         };
     }
+
+    fn update_term(&mut self, new_term: Term) {
+        // Any RPC with newer term causes the recipient to advance its term first.
+        // See TLA⁺ spec L405-L411
+        if new_term > self.current_term {
+            self.current_term = new_term;
+            self.become_follower();
+        }
+    }
 }
 
-/// The `Role` enumerates the possible roles of a server.
+/// The `Role` type enumerates the possible roles of a server.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum Role {
     Leader,
@@ -362,8 +472,6 @@ mod tests {
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
-            srv0.become_leader();
-
             srv0.handle_client('m');
         }
 
@@ -381,10 +489,11 @@ mod tests {
 
     #[test]
     #[should_panic]
-    fn test_become_leader() {
+    fn test_not_transition_leader_without_being_candidate() {
         let mut net = FakeNetwork::<()>::new(1);
         let node = net.new_node(0);
         let mut srv = Server::new(node);
+        assert_eq!(srv.role, Role::Follower);
         srv.become_leader();
     }
 
@@ -393,8 +502,27 @@ mod tests {
         let mut net = FakeNetwork::<()>::new(1);
         let node = net.new_node(0);
         let mut srv = Server::new(node);
+        assert_eq!(srv.role, Role::Follower);
         srv.become_candidate();
+        assert_eq!(srv.role, Role::Candidate);
+        assert_eq!(srv.current_term, Some(1));
         srv.become_candidate();
+        assert_eq!(srv.role, Role::Candidate);
+        assert_eq!(srv.current_term, Some(2));
+    }
+
+    #[test]
+    fn test_become_leader() {
+        let mut net = FakeNetwork::<()>::new(1);
+        let node = net.new_node(0);
+        let mut srv = Server::new(node);
+        assert_eq!(srv.role, Role::Follower);
+        srv.become_candidate();
+        assert_eq!(srv.role, Role::Candidate);
+        assert_eq!(srv.current_term, Some(1));
+        srv.become_leader();
+        assert_eq!(srv.role, Role::Leader);
+        assert_eq!(srv.current_term, Some(1));
     }
 
     #[test]
@@ -413,7 +541,6 @@ mod tests {
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
-            srv0.become_leader();
             srv0.handle_client('m');
         }
 
@@ -437,6 +564,43 @@ mod tests {
                 srv.node.get_id()
             );
         }
+    }
+
+    #[test]
+    fn test_election_paper_fig7() {
+        let (mut net, mut servers) = create_servers();
+        {
+            let srv0 = &mut servers[0];
+            srv0.log.entries.pop();
+            srv0.become_candidate();
+        }
+        process_events(&mut servers, &mut net);
+
+        assert_eq!(servers[0].votes.get("0").unwrap().granted, true);
+        assert_eq!(servers[0].votes.get("1").unwrap().granted, true);
+        assert_eq!(servers[0].votes.get("2").unwrap().granted, true);
+        assert_eq!(servers[0].votes.get("3").unwrap().granted, false);
+        assert_eq!(servers[0].votes.get("4").unwrap().granted, false);
+        assert_eq!(servers[0].votes.get("5").unwrap().granted, true);
+        assert_eq!(servers[0].votes.get("6").unwrap().granted, true);
+        servers[0].role = Role::Follower;
+
+        {
+            let srv2 = &mut servers[2];
+            srv2.become_candidate();
+        }
+
+        process_events(&mut servers, &mut net);
+
+        assert_eq!(servers[2].votes.get("0").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("1").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("2").unwrap().granted, true);
+        assert_eq!(servers[2].votes.get("3").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("4").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("5").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("6").unwrap().granted, true);
+
+        assert_eq!(servers[2].role, Role::Candidate);
     }
 
     fn setup_logs_scenario_paper_fig7() -> Vec<Log<char>> {
@@ -464,7 +628,6 @@ mod tests {
                 Entry::new(5, 'h'),
                 Entry::new(6, 'i'),
                 Entry::new(6, 'j'),
-                Entry::new(6, 'k'),
             ]),
             Log::from(vec![
                 Entry::new(1, 'a'),
