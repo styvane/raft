@@ -182,3 +182,22 @@ where
         })
     }
 }
+
+/// The `Message` type wraps the [`Event`] and the source.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+pub struct Message<V> {
+    pub event: Event<V>,
+    pub dest: String,
+}
+
+impl<V> Message<V>
+where
+    V: fmt::Debug + Clone,
+{
+    pub fn new(dest: &str, event: Event<V>) -> Self {
+        Message {
+            dest: dest.to_string(),
+            event,
+        }
+    }
+}
