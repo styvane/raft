@@ -3,9 +3,10 @@
 
 use crate::log::Entries;
 use crate::types::{Index, Term};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct AppendEntries<V> {
     /// Leader's current term
     pub term: Term,
@@ -29,7 +30,7 @@ pub struct AppendEntries<V> {
     pub dest: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct AppendEntriesResponse {
     /// Current term for leader to update itself.
     pub term: Term,
@@ -48,7 +49,7 @@ pub struct AppendEntriesResponse {
 }
 
 /// The `Vote` type owns a vote casted by a peer.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct Vote {
     pub peer: String,
 
@@ -72,7 +73,7 @@ impl Vote {
 }
 
 /// The `RequestVote` owns the data to send to request vote from peers.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct RequestVote {
     /// Candidate's term
     pub term: Term,
@@ -91,7 +92,7 @@ pub struct RequestVote {
 }
 
 /// The `RequestVoteResponse` owns the reponse data for a [`RequestVote`].
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct RequestVoteResponse {
     /// Current term for candidate to update itself.
     pub term: Term,
@@ -107,7 +108,7 @@ pub struct RequestVoteResponse {
 }
 
 /// Event in the Raft system.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub enum Event<V> {
     AppendEntries(AppendEntries<V>),
     AppendEntriesResponse(AppendEntriesResponse),
@@ -186,7 +187,7 @@ where
 }
 
 /// The `Message` type wraps the [`Event`] and the source.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct Message<V> {
     pub event: Event<V>,
     pub dest: String,

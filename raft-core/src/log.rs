@@ -2,9 +2,10 @@
 
 use crate::types::{Index, Term};
 use anyhow::{self, bail};
+use serde::{Deserialize, Serialize};
 
 /// Entry owns the data for the log entry.
-#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub struct Entry<V> {
     pub term: usize,
     pub value: V,

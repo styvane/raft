@@ -66,15 +66,24 @@ where
     V: Clone + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let commit_index = self
+            .commit_index
+            .clone()
+            .map_or_else(|| String::from("None"), |x| x.to_string());
+
+        let vote_for = self
+            .vote_for
+            .clone()
+            .unwrap_or_else(|| String::from("None"));
+
         write!(
             f,
-            "Server<id={}, term={:?}, role={},  vote_for={}, log={:?}>",
+            "Server<id={}, term={:?}, role={},  commit_index={}, vote_for={}, log={:?}>",
             self.config.get(&self.id).hostname(),
             self.current_term,
             self.role,
-            self.vote_for
-                .clone()
-                .unwrap_or_else(|| String::from("None")),
+            commit_index,
+            vote_for,
             self.log
         )
     }
@@ -343,9 +352,10 @@ where
             // The next log to send is the log at the index immediately
             // after match index.
             // See TLA⁺ spec L395
-            self.next_index
-                .insert(source.clone(), match_index.unwrap() + 1);
-
+            if match_index.is_some() {
+                self.next_index
+                    .insert(source.clone(), match_index.unwrap() + 1);
+            }
             // Update match index.
             // See TLA⁺ spec L396.
             self.match_index.insert(source, match_index);
@@ -524,17 +534,14 @@ mod tests {
             while let Some(Message { dest, event }) = messages.pop_front() {
                 servers
                     .iter_mut()
-                    .find(|srv| {
-                        //println!("{:?} {:?}", srv, dest);
-                        srv.config.get(&srv.id).hostname() == dest
-                    })
+                    .find(|srv| srv.config.get(&srv.id).hostname() == dest)
                     .unwrap()
                     .handle(event);
             }
         }
     }
 
-    fn create_servers() -> Vec<Server<char>> {
+    fn fig7_paper_servers() -> Vec<Server<char>> {
         let size = 7;
         let mut servers = Vec::with_capacity(size);
 
@@ -588,9 +595,51 @@ mod tests {
         return servers;
     }
 
+    fn new_servers() -> Vec<Server<char>> {
+        let size = 5;
+        let mut servers = Vec::with_capacity(size);
+
+        let config = Cluster::init_from_str(
+            r#"
+	        id = "raft"
+
+                [[members]]
+	        id = 0
+	        host = "0"
+
+                [[members]]
+		id = 1
+		host = "1"
+
+
+                [[members]]
+		id = 2
+		host = "2"
+
+
+                [[members]]
+		id = 3
+		host = "3"
+
+
+                [[members]]
+		id = 4
+		host = "4"
+            "#,
+            FileFormat::Toml,
+        )
+        .unwrap();
+        for i in 0..size {
+            let srv = Server::new(i, config.clone());
+            servers.push(srv);
+        }
+
+        return servers;
+    }
+
     #[test]
     fn test_log_replication_scenario_paper_fig7() {
-        let mut servers = create_servers();
+        let mut servers = fig7_paper_servers();
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
@@ -696,7 +745,7 @@ mod tests {
 
     #[test]
     fn test_consensus_log_replication_paper_fig7() {
-        let mut servers = create_servers();
+        let mut servers = fig7_paper_servers();
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
@@ -727,7 +776,7 @@ mod tests {
 
     #[test]
     fn test_election_paper_fig7() {
-        let mut servers = create_servers();
+        let mut servers = fig7_paper_servers();
         {
             let srv0 = &mut servers[0];
             srv0.log.entries.pop();
@@ -746,7 +795,7 @@ mod tests {
 
     #[test]
     fn test_server2_cannot_become_leader_paper_fig7() {
-        let mut servers = create_servers();
+        let mut servers = fig7_paper_servers();
         {
             let srv2 = &mut servers[2];
             srv2.become_candidate();
@@ -770,7 +819,7 @@ mod tests {
 
     #[test]
     fn test_hartbeat_paper_fig7() {
-        let mut servers = create_servers();
+        let mut servers = fig7_paper_servers();
         for srv in servers[..].iter() {
             assert!(!srv.leader_hartbeat_is_received);
         }
@@ -794,7 +843,7 @@ mod tests {
 
     #[test]
     fn test_election_timeout_paper_fig7() {
-        let mut servers = create_servers();
+        let mut servers = fig7_paper_servers();
         for srv in servers[..].iter() {
             assert!(!srv.leader_hartbeat_is_received);
         }
@@ -838,7 +887,7 @@ mod tests {
 
     #[test]
     fn test_received_hartbeat_during_election_paper_fig7() {
-        let mut servers = create_servers();
+        let mut servers = fig7_paper_servers();
         for srv in servers[..].iter() {
             assert!(!srv.leader_hartbeat_is_received);
         }
@@ -867,6 +916,69 @@ mod tests {
         process_events(&mut servers);
         assert_eq!(servers[0].role, Role::Leader);
         assert_eq!(servers[2].role, Role::Follower);
+    }
+
+    #[test]
+    fn test_new_servers() {
+        let mut servers = new_servers();
+        {
+            let srv0 = &mut servers[0];
+            srv0.become_candidate();
+        }
+
+        process_events(&mut servers);
+
+        assert_eq!(servers[0].role, Role::Leader);
+        for srv in servers[1..5].iter() {
+            assert_eq!(
+                srv.last_applied,
+                None,
+                "expected last applied None found {:?} for srv{}",
+                srv.last_applied,
+                srv.config.get(&srv.id).hostname(),
+            );
+
+            assert_eq!(
+                srv.current_term,
+                Some(1),
+                "expected current term Some(1) found {:?} for srv{}",
+                srv.current_term,
+                srv.config.get(&srv.id).hostname(),
+            );
+        }
+
+        assert_eq!(servers[0].current_term, Some(1));
+        {
+            let srv0 = &mut servers[0];
+            srv0.handle_client('a');
+        }
+        process_events(&mut servers);
+        assert_eq!(servers[0].last_applied, Some(0));
+        for srv in servers[1..5].iter() {
+            assert_eq!(
+                srv.last_applied,
+                None,
+                "expected last applied None found {:?} for srv{}",
+                srv.last_applied,
+                srv.config.get(&srv.id).hostname(),
+            );
+        }
+
+        {
+            let srv0 = &mut servers[0];
+            srv0.handle_client('b');
+        }
+        process_events(&mut servers);
+        assert_eq!(servers[0].last_applied, Some(1));
+        for srv in servers[1..5].iter() {
+            assert_eq!(
+                srv.last_applied,
+                Some(0),
+                "expected last applied 0 found {:?} for srv{}",
+                srv.last_applied,
+                srv.config.get(&srv.id).hostname(),
+            );
+        }
     }
 
     fn setup_logs_scenario_paper_fig7() -> Vec<Log<char>> {
