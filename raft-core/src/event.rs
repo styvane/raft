@@ -5,7 +5,7 @@ use crate::log::Entries;
 use crate::types::{Index, Term};
 use std::fmt;
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AppendEntries<V> {
     /// Leader's current term
     pub term: Term,
@@ -29,7 +29,7 @@ pub struct AppendEntries<V> {
     pub dest: String,
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AppendEntriesResponse {
     /// Current term for leader to update itself.
     pub term: Term,
@@ -48,7 +48,7 @@ pub struct AppendEntriesResponse {
 }
 
 /// The `Vote` type owns a vote casted by a peer.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Vote {
     pub peer: String,
 
@@ -71,7 +71,8 @@ impl Vote {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+/// The `RequestVote` owns the data to send to request vote from peers.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RequestVote {
     /// Candidate's term
     pub term: Term,
@@ -89,7 +90,8 @@ pub struct RequestVote {
     pub dest: String,
 }
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+/// The `RequestVoteResponse` owns the reponse data for a [`RequestVote`].
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RequestVoteResponse {
     /// Current term for candidate to update itself.
     pub term: Term,
@@ -105,7 +107,7 @@ pub struct RequestVoteResponse {
 }
 
 /// Event in the Raft system.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Event<V> {
     AppendEntries(AppendEntries<V>),
     AppendEntriesResponse(AppendEntriesResponse),

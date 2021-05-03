@@ -2,7 +2,8 @@
 //!
 //! This module contains the Raft server implementation.
 
-use crate::config::Config;
+use crate::config::Cluster;
+
 use crate::event::{
     AppendEntries, AppendEntriesResponse, Event, Message, RequestVote, RequestVoteResponse, Vote,
 };
@@ -16,8 +17,12 @@ use std::fmt;
 /// The type `Server` is the raft server.
 #[derive(Debug)]
 pub struct Server<V> {
+    // Server Id
+    id: usize,
+
     // The server configuration
-    config: Config,
+    config: Cluster,
+
     // The log for this server.
     log: Log<V>,
 
@@ -64,7 +69,7 @@ where
         write!(
             f,
             "Server<id={}, term={:?}, role={},  vote_for={}, log={:?}>",
-            self.config.get_addr(),
+            self.config.get(&self.id).hostname(),
             self.current_term,
             self.role,
             self.vote_for
@@ -77,12 +82,13 @@ where
 
 impl<V> Server<V>
 where
-    V: fmt::Debug + Clone,
+    V: Clone + fmt::Debug,
 {
     /// Create new Raft server.
-    pub fn new(config: Config) -> Self {
-        let size = config.cluster_size();
+    pub fn new(id: usize, config: Cluster) -> Self {
+        let size = config.size();
         Server {
+            id,
             config,
             log: Log::<V>::default(),
             current_term: None,
@@ -100,12 +106,15 @@ where
     }
 
     /// Create new Raft server with a existing log.
-    pub fn with_log(config: Config, log: Log<V>) -> Self {
-        let next_index: HashMap<String, usize> =
-            config.peers().iter().map(|x| (x.clone(), 0)).collect();
+    pub fn with_log(id: usize, config: Cluster, log: Log<V>) -> Self {
+        let next_index: HashMap<String, usize> = config
+            .members_iter()
+            .map(|x| (x.hostname().to_string(), 0))
+            .collect();
 
-        let size = config.cluster_size();
+        let size = config.size();
         Server {
+            id,
             config,
             log,
             current_term: None,
@@ -139,16 +148,19 @@ where
         // See TLA⁺ spec L232
         self.next_index = self
             .config
-            .peers()
-            .iter()
-            .map(|x| (x.clone(), self.log.len()))
+            .members_iter()
+            .map(|x| (x.hostname().to_string(), self.log.len()))
             .collect();
 
         // Once elected, the self must commit a new entry to it log.
         // It also needs to send send appendEntries to followers.
-        self.log
-            .append_entries(self.log.previous_index(), self.log.previous_term(), &[]);
-        self.broadcast_append_entries();
+        if self
+            .log
+            .append_entries(self.log.previous_index(), self.log.previous_term(), &[])
+            .is_ok()
+        {
+            self.broadcast_append_entries();
+        }
     }
 
     /// This method change the server's role to [`Role::Candidate`].
@@ -170,8 +182,8 @@ where
         self.role = Role::Candidate;
         // Vote for self
         self.votes.insert(
-            self.config.get_addr().to_string(),
-            Vote::cast(self.config.get_addr()),
+            self.config.get(&self.id).hostname().to_string(),
+            Vote::cast(self.config.get(&self.id).hostname()),
         );
 
         // Send request vote to all.
@@ -209,18 +221,19 @@ where
         };
 
         entry.push(Entry::new(current_term, data));
-        let success =
-            self.log
-                .append_entries(self.log.previous_index(), self.log.previous_term(), &entry);
-        if success {
+        if self
+            .log
+            .append_entries(self.log.previous_index(), self.log.previous_term(), &entry)
+            .is_ok()
+        {
             self.broadcast_append_entries();
         }
     }
 
     /// Send AppendEntries RPC to all peers.
     fn broadcast_append_entries(&mut self) {
-        for peer in self.config.peers() {
-            self.send_append_entries(&peer);
+        for peer in self.config.clone().members_iter().map(|x| x.hostname()) {
+            self.send_append_entries(peer);
         }
     }
 
@@ -250,7 +263,7 @@ where
             previous_term,
             entries.to_vec(),
             commit_index,
-            self.config.get_addr(),
+            self.config.get(&self.id).hostname(),
             &peer,
         );
 
@@ -277,9 +290,15 @@ where
         self.update_term(term);
         self.leader_hartbeat_is_received = true;
 
-        let success = self
-            .log
-            .append_entries(previous_index, previous_term, &entries);
+        let success = if {
+            self.log
+                .append_entries(previous_index, previous_term, &entries)
+                .is_ok()
+        } {
+            true
+        } else {
+            false
+        };
 
         if success {
             // Update self commit index to the minimum value between the leader commit index
@@ -362,17 +381,17 @@ where
 
     /// Send a vote request to all peers.
     pub fn broadcast_request_vote(&mut self) {
-        for peer in self.config.peers() {
-            if !self.votes.contains_key(&peer) {
+        for peer in self.config.members_iter().map(|x| x.hostname()) {
+            if !self.votes.contains_key(peer) {
                 let event: Event<V> = Event::new_request_vote(
                     self.current_term,
                     self.log.previous_index(),
                     self.log.previous_term(),
-                    self.config.get_addr(),
-                    &peer,
+                    self.config.get(&self.id).hostname(),
+                    peer,
                 );
 
-                self.messages.push_back(Message::new(&peer, event));
+                self.messages.push_back(Message::new(peer, event));
             }
         }
     }
@@ -489,6 +508,7 @@ impl fmt::Display for Role {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use config::FileFormat;
 
     fn process_events(servers: &mut [Server<char>]) {
         loop {
@@ -506,7 +526,7 @@ mod tests {
                     .iter_mut()
                     .find(|srv| {
                         //println!("{:?} {:?}", srv, dest);
-                        srv.config.get_addr() == dest
+                        srv.config.get(&srv.id).hostname() == dest
                     })
                     .unwrap()
                     .handle(event);
@@ -518,10 +538,49 @@ mod tests {
         let size = 7;
         let mut servers = Vec::with_capacity(size);
 
+        let config = Cluster::init_from_str(
+            r#"
+	        id = "raft"
+
+                [[members]]
+	        id = 0
+	        host = "0"
+
+                [[members]]
+		id = 1
+		host = "1"
+
+
+                [[members]]
+		id = 2
+		host = "2"
+
+
+                [[members]]
+		id = 3
+		host = "3"
+
+
+                [[members]]
+		id = 4
+		host = "4"
+
+
+                [[members]]
+		id = 5
+		host = "5"
+
+
+                [[members]]
+		id = 6
+		host = "6"
+            "#,
+            FileFormat::Toml,
+        )
+        .unwrap();
         for (i, log) in setup_logs_scenario_paper_fig7().into_iter().enumerate() {
-            let cfg = Config::new(i);
             let term = log.previous_term();
-            let mut srv = Server::with_log(cfg, log);
+            let mut srv = Server::with_log(i, config.clone(), log);
             srv.current_term = term;
             servers.push(srv);
         }
@@ -545,7 +604,7 @@ mod tests {
                 servers[0].log.entries,
                 srv.log.entries,
                 "srv{} log does not match leader",
-                srv.config.get_addr()
+                srv.config.get(&srv.id).hostname()
             );
         }
     }
@@ -553,16 +612,37 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_not_transition_leader_without_being_candidate() {
-        let cfg = Config::new(0);
-        let mut srv: Server<()> = Server::new(cfg);
+        let cfg = Cluster::init_from_str(
+            r#"
+	        id = "raft"
+
+                [[members]]
+	        id = 0
+	        host = "0"
+            "#,
+            FileFormat::Toml,
+        )
+        .unwrap();
+        let mut srv: Server<()> = Server::new(0, cfg);
         assert_eq!(srv.role, Role::Follower);
         srv.become_leader();
     }
 
     #[test]
     fn test_become_candidate() {
-        let cfg = Config::new(0);
-        let mut srv: Server<()> = Server::new(cfg);
+        let cfg = Cluster::init_from_str(
+            r#"
+	        id = "raft"
+
+                [[members]]
+	        id = 0
+	        host = "0"
+            "#,
+            FileFormat::Toml,
+        )
+        .unwrap();
+        let mut srv: Server<()> = Server::new(0, cfg);
+
         assert_eq!(srv.role, Role::Follower);
         srv.become_candidate();
         assert_eq!(srv.role, Role::Candidate);
@@ -574,8 +654,18 @@ mod tests {
 
     #[test]
     fn test_become_leader() {
-        let cfg = Config::new(0);
-        let mut srv: Server<()> = Server::new(cfg);
+        let cfg = Cluster::init_from_str(
+            r#"
+	        id = "raft"
+
+                [[members]]
+	        id = 0
+	        host = "0"
+            "#,
+            FileFormat::Toml,
+        )
+        .unwrap();
+        let mut srv: Server<()> = Server::new(0, cfg);
         assert_eq!(srv.role, Role::Follower);
         srv.become_candidate();
         assert_eq!(srv.role, Role::Candidate);
@@ -588,8 +678,18 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_leader_cannot_become_candidate() {
-        let cfg = Config::new(0);
-        let mut srv: Server<()> = Server::new(cfg);
+        let cfg = Cluster::init_from_str(
+            r#"
+	        id = "raft"
+
+                [[members]]
+	        id = 0
+	        host = "0"
+            "#,
+            FileFormat::Toml,
+        )
+        .unwrap();
+        let mut srv: Server<()> = Server::new(0, cfg);
         srv.role = Role::Leader;
         srv.become_candidate();
     }
@@ -620,7 +720,7 @@ mod tests {
                 Some(11),
                 "expected last applied Some(11) found {:?} for srv{}",
                 srv.last_applied,
-                srv.config.get_addr()
+                srv.config.get(&srv.id).hostname(),
             );
         }
     }
@@ -635,34 +735,13 @@ mod tests {
         }
         process_events(&mut servers);
 
-        assert_eq!(
-            servers[0].votes.get("127.0.0.1:27000").unwrap().granted,
-            true
-        );
-        assert_eq!(
-            servers[0].votes.get("127.0.0.1:28000").unwrap().granted,
-            true
-        );
-        assert_eq!(
-            servers[0].votes.get("127.0.0.1:29000").unwrap().granted,
-            true
-        );
-        assert_eq!(
-            servers[0].votes.get("127.0.0.1:30000").unwrap().granted,
-            false
-        );
-        assert_eq!(
-            servers[0].votes.get("127.0.0.1:31000").unwrap().granted,
-            false
-        );
-        assert_eq!(
-            servers[0].votes.get("127.0.0.1:32000").unwrap().granted,
-            true
-        );
-        assert_eq!(
-            servers[0].votes.get("127.0.0.1:33000").unwrap().granted,
-            true
-        );
+        assert_eq!(servers[0].votes.get("0").unwrap().granted, true);
+        assert_eq!(servers[0].votes.get("1").unwrap().granted, true);
+        assert_eq!(servers[0].votes.get("2").unwrap().granted, true);
+        assert_eq!(servers[0].votes.get("3").unwrap().granted, false);
+        assert_eq!(servers[0].votes.get("4").unwrap().granted, false);
+        assert_eq!(servers[0].votes.get("5").unwrap().granted, true);
+        assert_eq!(servers[0].votes.get("6").unwrap().granted, true);
     }
 
     #[test]
@@ -674,34 +753,13 @@ mod tests {
         }
         process_events(&mut servers);
 
-        assert_eq!(
-            servers[2].votes.get("127.0.0.1:27000").unwrap().granted,
-            false
-        );
-        assert_eq!(
-            servers[2].votes.get("127.0.0.1:28000").unwrap().granted,
-            false
-        );
-        assert_eq!(
-            servers[2].votes.get("127.0.0.1:29000").unwrap().granted,
-            true
-        );
-        assert_eq!(
-            servers[2].votes.get("127.0.0.1:30000").unwrap().granted,
-            false
-        );
-        assert_eq!(
-            servers[2].votes.get("127.0.0.1:31000").unwrap().granted,
-            false
-        );
-        assert_eq!(
-            servers[2].votes.get("127.0.0.1:32000").unwrap().granted,
-            false
-        );
-        assert_eq!(
-            servers[2].votes.get("127.0.0.1:33000").unwrap().granted,
-            true
-        );
+        assert_eq!(servers[2].votes.get("0").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("1").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("2").unwrap().granted, true);
+        assert_eq!(servers[2].votes.get("3").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("4").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("5").unwrap().granted, false);
+        assert_eq!(servers[2].votes.get("6").unwrap().granted, true);
 
         assert_eq!(
             servers[2].role,
@@ -730,7 +788,7 @@ mod tests {
             assert!(srv.leader_hartbeat_is_received);
             assert!(servers[0]
                 .followers_hartbeat
-                .contains(srv.config.get_addr()));
+                .contains(srv.config.get(&srv.id).hostname()));
         }
     }
 

@@ -1,6 +1,7 @@
 //! Raft log.
 
 use crate::types::{Index, Term};
+use anyhow::{self, bail};
 
 /// Entry owns the data for the log entry.
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Clone)]
@@ -35,7 +36,7 @@ use std::fmt;
 impl<V: Clone + fmt::Debug> Log<V> {
     /// Create a log from existing entries.
     ///
-    /// This shoud be use for testing purpose only.
+    #[allow(dead_code)]
     pub(crate) fn from(entries: Vec<Entry<V>>) -> Self {
         Self { entries }
     }
@@ -70,19 +71,19 @@ impl<V: Clone + fmt::Debug> Log<V> {
         previous_index: Index,
         previous_term: Term,
         entries: &[Entry<V>],
-    ) -> bool {
+    ) -> anyhow::Result<()> {
         if let Some(index) = previous_index {
             // Check whether the previous index received is the same as the current index in the log.
             // because the log is never allowed to have holes.
             if !self.is_empty() && index > self.len() - 1 {
-                return false;
+                bail!("log is never allowed to have holes");
             }
 
             if let Some(term) = previous_term {
                 // Check whether the previous term received is the same as the current term of the last
                 // log entries.
                 if self.entries[index].term != term {
-                    return false;
+                    bail!("mismatch previous term");
                 }
             }
         }
@@ -115,7 +116,7 @@ impl<V: Clone + fmt::Debug> Log<V> {
             }
         }
         self.entries.extend_from_slice(entries);
-        true
+        Ok(())
     }
 }
 
@@ -127,19 +128,29 @@ mod tests {
     fn test_append_entries() {
         let mut log = Log::default();
         assert!(
-            log.append_entries(None, None, &[Entry::new(1, 'x')]),
+            log.append_entries(None, None, &[Entry::new(1, 'x')])
+                .is_ok(),
             "append entries failed on empty log"
         );
         assert_eq!(log.entries, [Entry::new(1, 'x')]);
         assert!(
-            log.append_entries(None, Some(1), &[Entry::new(1, 'x')]),
+            log.append_entries(None, Some(1), &[Entry::new(1, 'x')])
+                .is_ok(),
             "idempotent append entry failed"
         );
         assert_eq!(log.entries, [Entry::new(1, 'x')]);
-        assert!(log.append_entries(Some(0), Some(1), &[Entry::new(1, 'y')]));
-        assert!(log.append_entries(Some(0), Some(1), &[Entry::new(1, 'y')]));
-        assert!(log.append_entries(Some(1), Some(1), &[Entry::new(2, 'y')]));
-        assert!(log.append_entries(Some(1), Some(1), &[Entry::new(2, 'y')]));
+        assert!(log
+            .append_entries(Some(0), Some(1), &[Entry::new(1, 'y')])
+            .is_ok());
+        assert!(log
+            .append_entries(Some(0), Some(1), &[Entry::new(1, 'y')])
+            .is_ok());
+        assert!(log
+            .append_entries(Some(1), Some(1), &[Entry::new(2, 'y')])
+            .is_ok());
+        assert!(log
+            .append_entries(Some(1), Some(1), &[Entry::new(2, 'y')])
+            .is_ok());
         assert_eq!(
             log.entries,
             [Entry::new(1, 'x'), Entry::new(1, 'y'), Entry::new(2, 'y')]
@@ -177,8 +188,9 @@ mod tests {
             Entry::new(6, 'j'),
             Entry::new(6, 'k'),
         ]);
-        let ok = follower_a.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]);
-        assert!(ok);
+        let result =
+            follower_a.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]);
+        assert!(result.is_ok());
         assert_eq!(follower_a.entries, leader.entries);
     }
 
@@ -192,7 +204,9 @@ mod tests {
             Entry::new(4, 'd'),
         ]);
 
-        assert!(!follower_b.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
+        assert!(follower_b
+            .append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..])
+            .is_err());
         assert_ne!(follower_b.entries, leader.entries);
     }
 
@@ -213,7 +227,9 @@ mod tests {
             Entry::new(6, 'l'),
         ]);
 
-        assert!(follower_c.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
+        assert!(follower_c
+            .append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..])
+            .is_ok());
         assert_eq!(follower_c.entries, leader.entries);
     }
     #[test]
@@ -233,7 +249,9 @@ mod tests {
             Entry::new(7, 'l'),
             Entry::new(7, 'm'),
         ]);
-        assert!(follower_d.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
+        assert!(follower_d
+            .append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..])
+            .is_ok());
         assert_eq!(follower_d.entries, leader.entries);
     }
 
@@ -250,7 +268,9 @@ mod tests {
             Entry::new(4, 'h'),
         ]);
 
-        assert!(!follower_e.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
+        assert!(!follower_e
+            .append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..])
+            .is_ok());
         assert_ne!(follower_e.entries, leader.entries);
     }
 
@@ -271,7 +291,9 @@ mod tests {
             Entry::new(3, 'l'),
         ]);
 
-        assert!(!follower_f.append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..]));
+        assert!(!follower_f
+            .append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..])
+            .is_ok());
         assert_ne!(follower_f.entries, leader.entries);
     }
 }

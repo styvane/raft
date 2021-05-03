@@ -1,60 +1,57 @@
 //! Raft cluster configuration
 
-use std::collections::HashMap;
-
-type VecPeer = Vec<String>;
-
-/// Node configuration
-#[derive(Debug)]
-pub struct Config {
+use config::{Config as Configure, File, FileFormat};
+use serde::Deserialize;
+use std::slice::Iter;
+/// Cluster member configuration.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Member {
     id: usize,
-    addr: String,
-    peers: VecPeer,
+    host: String,
 }
 
-impl Config {
-    pub fn new(node_id: usize) -> Self {
-        let config = Self::init();
-        let addr = config.get(&node_id).clone().unwrap().to_string();
+/// Cluster configuration.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Cluster {
+    id: String,
+    members: Vec<Member>,
+}
 
-        let peers: Vec<String> = config
-            .into_iter()
-            .filter(|&(k, _)| k != node_id)
-            .map(|(_, v)| v)
-            .collect();
-
-        Config {
-            id: node_id,
-            addr,
-            peers,
-        }
+impl Cluster {
+    /// Create a cluster configuration from a string.
+    pub fn init_from_str(data: &str, format: FileFormat) -> anyhow::Result<Self> {
+        let mut cfg = Configure::new();
+        cfg.merge(File::from_str(data, format))?;
+        let cfg = cfg.try_into::<Self>()?;
+        Ok(cfg)
     }
 
-    fn init() -> HashMap<usize, String> {
-        [
-            (0, "127.0.0.1:27000"),
-            (1, "127.0.0.1:28000"),
-            (2, "127.0.0.1:29000"),
-            (3, "127.0.0.1:30000"),
-            (4, "127.0.0.1:31000"),
-            (5, "127.0.0.1:32000"),
-            (6, "127.0.0.1:33000"),
-        ]
-        .iter()
-        .map(|&(id, addr)| (id, String::from(addr)))
-        .collect()
+    /// This method returns the configuration of the member associated with
+    /// the given Id.
+    pub fn get(&self, id: &usize) -> Member {
+        self.members[*id].clone()
     }
 
-    pub fn get_addr(&self) -> &str {
-        &self.addr
+    /// Return the size of the cluster.
+    pub fn size(&self) -> usize {
+        self.members.len()
     }
 
-    pub fn peers(&self) -> VecPeer {
-        self.peers.clone()
+    /// Return an iterator over a slice of all members in the cluster.
+    pub fn members_iter(&self) -> Iter<Member> {
+        self.members.iter()
+    }
+}
+
+impl Member {
+    /// Return the hostname value.
+    pub fn hostname(&self) -> &str {
+        &self.host
     }
 
-    pub fn cluster_size(&self) -> usize {
-        self.peers.len()
+    /// Return the list of its peers hostname.
+    pub fn id(&self) -> usize {
+        self.id
     }
 }
 
@@ -64,19 +61,25 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let values: Vec<_> = [
-            "127.0.0.1:27000",
-            "127.0.0.1:28000",
-            "127.0.0.1:29000",
-            "127.0.0.1:30000",
-            "127.0.0.1:31000",
-            "127.0.0.1:32000",
-            "127.0.0.1:33000",
-        ]
-        .iter()
-        .map(|&x| String::from(x))
-        .collect();
+        let config = Cluster::init_from_str(
+            r#"
+	        id = "raft"
+                [[members]]
+	        id = 0
+	        host = "0"
 
-        assert!(Config::new(0).peers.iter().all(|x| values.contains(&x)))
+                [[members]]
+		id = 1
+		host = "1"
+            "#,
+            FileFormat::Toml,
+        );
+        assert_eq!(
+            config.unwrap().get(&0),
+            Member {
+                id: 0,
+                host: "0".to_string()
+            }
+        )
     }
 }
