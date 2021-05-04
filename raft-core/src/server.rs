@@ -51,11 +51,11 @@ pub struct Server<V> {
     // List of votes recorded,
     votes: HashMap<String, Vote>,
 
-    // Hartbeat from followers
-    followers_hartbeat: HashSet<String>,
+    // Heartbeat from followers
+    followers_heartbeat: HashSet<String>,
 
-    // Indicate whether is hartbeat was received from leader.
-    leader_hartbeat_is_received: bool,
+    // Indicate whether is heartbeat was received from leader.
+    leader_heartbeat_is_received: bool,
 
     // Emitted server events and destination.
     messages: VecDeque<Message<V>>,
@@ -108,8 +108,8 @@ where
             role: Role::Follower,
             last_applied: None,
             votes: HashMap::with_capacity(size),
-            followers_hartbeat: HashSet::with_capacity(size),
-            leader_hartbeat_is_received: false,
+            followers_heartbeat: HashSet::with_capacity(size),
+            leader_heartbeat_is_received: false,
             messages: VecDeque::new(),
         }
     }
@@ -134,8 +134,8 @@ where
             role: Role::Follower,
             last_applied: None,
             votes: HashMap::with_capacity(size),
-            followers_hartbeat: HashSet::with_capacity(size),
-            leader_hartbeat_is_received: false,
+            followers_heartbeat: HashSet::with_capacity(size),
+            leader_heartbeat_is_received: false,
             messages: VecDeque::new(),
         }
     }
@@ -174,7 +174,7 @@ where
 
     /// This method change the server's role to [`Role::Candidate`].
     ///
-    /// When the server has not received any hartbeat during a certain period,
+    /// When the server has not received any heartbeat during a certain period,
     /// it starts an election by sending a vote request to it peers.
     pub fn become_candidate(&mut self) {
         // Only followers and candidate are allowed to start new election.
@@ -199,19 +199,19 @@ where
         self.broadcast_request_vote();
     }
 
-    /// Send hartbeat to followers if self is a leader.
-    pub fn send_leader_hartbeat(&mut self) {
+    /// Send heartbeat to followers if self is a leader.
+    pub fn send_leader_heartbeat(&mut self) {
         if self.role == Role::Leader {
-            self.followers_hartbeat.clear();
+            self.followers_heartbeat.clear();
             self.broadcast_append_entries();
         }
     }
 
     /// Start a new election
     pub fn election_timeout(&mut self) {
-        if self.role != Role::Leader && !self.leader_hartbeat_is_received {
+        if self.role != Role::Leader && !self.leader_heartbeat_is_received {
             self.become_candidate();
-            self.leader_hartbeat_is_received = false;
+            self.leader_heartbeat_is_received = false;
         }
     }
 
@@ -297,7 +297,7 @@ where
         } = request;
 
         self.update_term(term);
-        self.leader_hartbeat_is_received = true;
+        self.leader_heartbeat_is_received = true;
 
         let success = if {
             self.log
@@ -345,8 +345,8 @@ where
             ..
         } = response;
 
-        // Record hartbeat for this follower.
-        self.followers_hartbeat.insert(source.clone());
+        // Record heartbeat for this follower.
+        self.followers_heartbeat.insert(source.clone());
 
         if success {
             // The next log to send is the log at the index immediately
@@ -818,13 +818,13 @@ mod tests {
     }
 
     #[test]
-    fn test_hartbeat_paper_fig7() {
+    fn test_heartbeat_paper_fig7() {
         let mut servers = fig7_paper_servers();
         for srv in servers[..].iter() {
-            assert!(!srv.leader_hartbeat_is_received);
+            assert!(!srv.leader_heartbeat_is_received);
         }
 
-        assert!(servers[0].followers_hartbeat.is_empty());
+        assert!(servers[0].followers_heartbeat.is_empty());
 
         {
             let srv0 = &mut servers[0];
@@ -834,9 +834,9 @@ mod tests {
         process_events(&mut servers);
 
         for srv in servers[1..].iter() {
-            assert!(srv.leader_hartbeat_is_received);
+            assert!(srv.leader_heartbeat_is_received);
             assert!(servers[0]
-                .followers_hartbeat
+                .followers_heartbeat
                 .contains(srv.config.get(&srv.id).hostname()));
         }
     }
@@ -845,10 +845,10 @@ mod tests {
     fn test_election_timeout_paper_fig7() {
         let mut servers = fig7_paper_servers();
         for srv in servers[..].iter() {
-            assert!(!srv.leader_hartbeat_is_received);
+            assert!(!srv.leader_heartbeat_is_received);
         }
 
-        assert!(servers[0].followers_hartbeat.is_empty());
+        assert!(servers[0].followers_heartbeat.is_empty());
 
         {
             let srv0 = &mut servers[0];
@@ -886,13 +886,13 @@ mod tests {
     }
 
     #[test]
-    fn test_received_hartbeat_during_election_paper_fig7() {
+    fn test_received_heartbeat_during_election_paper_fig7() {
         let mut servers = fig7_paper_servers();
         for srv in servers[..].iter() {
-            assert!(!srv.leader_hartbeat_is_received);
+            assert!(!srv.leader_heartbeat_is_received);
         }
 
-        assert!(servers[0].followers_hartbeat.is_empty());
+        assert!(servers[0].followers_heartbeat.is_empty());
 
         {
             let srv0 = &mut servers[0];
