@@ -55,7 +55,7 @@ pub struct Server<V> {
     followers_heartbeat: HashSet<String>,
 
     // Indicate whether is heartbeat was received from leader.
-    leader_heartbeat_is_received: bool,
+    has_heard_from_leader: bool,
 
     // Emitted server events and destination.
     messages: VecDeque<Message<V>>,
@@ -109,7 +109,7 @@ where
             last_applied: None,
             votes: HashMap::with_capacity(size),
             followers_heartbeat: HashSet::with_capacity(size),
-            leader_heartbeat_is_received: false,
+            has_heard_from_leader: false,
             messages: VecDeque::new(),
         }
     }
@@ -135,7 +135,7 @@ where
             last_applied: None,
             votes: HashMap::with_capacity(size),
             followers_heartbeat: HashSet::with_capacity(size),
-            leader_heartbeat_is_received: false,
+            has_heard_from_leader: false,
             messages: VecDeque::new(),
         }
     }
@@ -209,9 +209,9 @@ where
 
     /// Start a new election
     pub fn election_timeout(&mut self) {
-        if self.role != Role::Leader && !self.leader_heartbeat_is_received {
+        if self.role != Role::Leader && !self.has_heard_from_leader {
             self.become_candidate();
-            self.leader_heartbeat_is_received = false;
+            self.has_heard_from_leader = false;
         }
     }
 
@@ -297,7 +297,7 @@ where
         } = request;
 
         self.update_term(term);
-        self.leader_heartbeat_is_received = true;
+        self.has_heard_from_leader = true;
 
         let success = if {
             self.log
@@ -821,7 +821,7 @@ mod tests {
     fn test_heartbeat_paper_fig7() {
         let mut servers = fig7_paper_servers();
         for srv in servers[..].iter() {
-            assert!(!srv.leader_heartbeat_is_received);
+            assert!(!srv.has_heard_from_leader);
         }
 
         assert!(servers[0].followers_heartbeat.is_empty());
@@ -834,7 +834,7 @@ mod tests {
         process_events(&mut servers);
 
         for srv in servers[1..].iter() {
-            assert!(srv.leader_heartbeat_is_received);
+            assert!(srv.has_heard_from_leader);
             assert!(servers[0]
                 .followers_heartbeat
                 .contains(srv.config.get(&srv.id).hostname()));
@@ -845,7 +845,7 @@ mod tests {
     fn test_election_timeout_paper_fig7() {
         let mut servers = fig7_paper_servers();
         for srv in servers[..].iter() {
-            assert!(!srv.leader_heartbeat_is_received);
+            assert!(!srv.has_heard_from_leader);
         }
 
         assert!(servers[0].followers_heartbeat.is_empty());
@@ -889,7 +889,7 @@ mod tests {
     fn test_received_heartbeat_during_election_paper_fig7() {
         let mut servers = fig7_paper_servers();
         for srv in servers[..].iter() {
-            assert!(!srv.leader_heartbeat_is_received);
+            assert!(!srv.has_heard_from_leader);
         }
 
         assert!(servers[0].followers_heartbeat.is_empty());
