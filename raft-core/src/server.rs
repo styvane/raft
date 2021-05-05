@@ -221,7 +221,7 @@ where
     }
 
     /// Handle client requests.
-    pub fn handle_client(&mut self, data: V) {
+    pub fn client_append_entry(&mut self, data: V) {
         let mut entry = Vec::with_capacity(1);
         let current_term = if let Some(ref term) = self.current_term {
             *term
@@ -645,7 +645,7 @@ mod tests {
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
-            srv0.handle_client('m');
+            srv0.client_append_entry('m');
         }
 
         process_events(&mut servers);
@@ -751,7 +751,7 @@ mod tests {
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
-            srv0.handle_client('m');
+            srv0.client_append_entry('m');
         }
 
         process_events(&mut servers);
@@ -760,7 +760,7 @@ mod tests {
 
         {
             let srv0 = &mut servers[0];
-            srv0.handle_client('m');
+            srv0.client_append_entry('m');
         }
 
         process_events(&mut servers);
@@ -912,7 +912,7 @@ mod tests {
         assert_eq!(servers[2].current_term, Some(5));
         {
             let srv0 = &mut servers[0];
-            srv0.handle_client('m');
+            srv0.client_append_entry('m');
         }
 
         process_events(&mut servers);
@@ -952,7 +952,7 @@ mod tests {
         assert_eq!(servers[0].current_term, Some(1));
         {
             let srv0 = &mut servers[0];
-            srv0.handle_client('a');
+            srv0.client_append_entry('a');
         }
         process_events(&mut servers);
         assert_eq!(servers[0].last_applied, Some(0));
@@ -968,7 +968,7 @@ mod tests {
 
         {
             let srv0 = &mut servers[0];
-            srv0.handle_client('b');
+            srv0.client_append_entry('b');
         }
         process_events(&mut servers);
         assert_eq!(servers[0].last_applied, Some(1));
