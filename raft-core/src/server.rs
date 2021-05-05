@@ -314,7 +314,9 @@ where
             // and the index of the last log entry.
             // See TLA⁺ spec L222
             if let Some(index) = commit_index {
-                self.commit_index = cmp::min(self.log.previous_index(), Some(index));
+                if self.log.previous_term() == self.current_term {
+                    self.commit_index = cmp::min(self.log.previous_index(), Some(index));
+                }
             }
             if self.commit_index > self.last_applied {
                 // Apply log to the state machine
