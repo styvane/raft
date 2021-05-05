@@ -25,7 +25,6 @@ pub struct ServerOptions {
 }
 
 /// The `Server` type represents the storage server
-#[allow(dead_code)]
 pub struct Server {
     options: ServerOptions,
 }
@@ -38,24 +37,30 @@ impl Server {
 
     /// Read a stream and send the event throught a channel.
     pub async fn read_stream(sender: Sender<Event>, stream: Arc<TcpStream>) {
+        let mut trp = Transport::new(&*stream);
         loop {
-            let stream = &*stream;
-            let mut trp = Transport::new(stream);
-            let message = trp.recv_message().await.unwrap();
-            if message.trim().is_empty() {
-                break;
-            }
-            let cmd = match serde_json::from_str(&message) {
-                Ok(v) => v,
-                Err(e) => Command::Invalid(format!("{:?}", e)),
-            };
+            match trp.recv_message().await {
+                Err(error) => {
+                    eprintln!("{:?}", error);
+                }
+                Ok(msg) => {
+                    if msg.trim().is_empty() {
+                        break;
+                    }
 
-            let addr = stream.peer_addr().unwrap();
-            let addr = format!("{}:{}", addr.ip(), addr.port());
-            let event = Event::new_request(cmd, addr);
+                    let cmd = match serde_json::from_str(&msg) {
+                        Ok(v) => v,
+                        Err(e) => Command::Invalid(format!("{:?}", e)),
+                    };
 
-            if let Err(e) = sender.send(event).await {
-                eprintln!("{:?}", e);
+                    let addr = stream.peer_addr().unwrap();
+                    let addr = format!("{}:{}", addr.ip(), addr.port());
+                    let event = Event::new_request(cmd, addr);
+
+                    if let Err(e) = sender.send(event).await {
+                        eprintln!("{:?}", e);
+                    }
+                }
             }
         }
     }

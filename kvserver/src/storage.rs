@@ -15,7 +15,7 @@ impl Storage {
     }
 
     /// Return a reference to a value corresponding to a key.
-    async fn perform_get(&self, key: &Key) -> Option<Value> {
+    async fn request_get(&self, key: &Key) -> Option<Value> {
         if let Some(value) = self.0.get(key).cloned() {
             Some(value)
         } else {
@@ -24,14 +24,36 @@ impl Storage {
     }
 
     /// Return a reference to a value corresponding to a key.
-    async fn perform_delete(&mut self, key: &Key) -> &'static str {
+    async fn request_delete(&mut self, key: &Key) -> &'static str {
         self.0.remove(key);
         "OK"
     }
 
     /// Set a key value in the store.
     /// If the key already exists, the value will be updated.
-    async fn perform_set(&mut self, key: Key, value: Value) -> &'static str {
+    async fn request_set(&mut self, key: Key, value: Value) -> &'static str {
+        self.0.insert(key, value);
+        "OK"
+    }
+
+    /// Return a reference to a value corresponding to a key.
+    async fn get(&self, key: &Key) -> Option<Value> {
+        if let Some(value) = self.0.get(key).cloned() {
+            Some(value)
+        } else {
+            Some("NOK".parse::<Value>().unwrap())
+        }
+    }
+
+    /// Return a reference to a value corresponding to a key.
+    async fn delete(&mut self, key: &Key) -> &'static str {
+        self.0.remove(key);
+        "OK"
+    }
+
+    /// Set a key value in the store.
+    /// If the key already exists, the value will be updated.
+    async fn set(&mut self, key: Key, value: Value) -> &'static str {
         self.0.insert(key, value);
         "OK"
     }
@@ -39,14 +61,14 @@ impl Storage {
     /// Query the storage.
     pub async fn query(&mut self, cmd: Command) -> Option<Value> {
         match cmd {
-            Command::Get { key } => self.perform_get(&key).await,
+            Command::Get { key } => self.get(&key).await,
             Command::Delete { key } => {
-                let value = self.perform_delete(&key).await;
+                let value = self.delete(&key).await;
                 let value: Value = value.parse().unwrap();
                 Some(value)
             }
             Command::Set { key, value } => {
-                let value = self.perform_set(key, value).await;
+                let value = self.set(key, value).await;
                 let value: Value = value.parse().unwrap();
                 Some(value)
             }
