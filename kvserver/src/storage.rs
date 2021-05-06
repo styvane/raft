@@ -2,21 +2,35 @@
 //! This module contains a key/value storage implementations.
 
 use crate::command::{Command, Key, Value};
+use raft_core::runtime::Runtime;
 use std::collections::BTreeMap;
-
 /// The type `Storage` type is a key/value storage.
 #[derive(Debug)]
-pub struct Storage(BTreeMap<Key, Value>);
+pub struct Storage {
+    data: BTreeMap<Key, Value>,
+    runtime: Option<Runtime<Command>>,
+}
 
 impl Storage {
+    /// Create a new storage with runtime.
+    pub fn with_runtime(runtime: Runtime<Command>) -> Storage {
+        Storage {
+            data: BTreeMap::new(),
+            runtime: Some(runtime),
+        }
+    }
+
     /// Create a new storage
     pub fn new() -> Storage {
-        Storage(BTreeMap::new())
+        Storage {
+            data: BTreeMap::new(),
+            runtime: None,
+        }
     }
 
     /// Return a reference to a value corresponding to a key.
     async fn request_get(&self, key: &Key) -> Option<Value> {
-        if let Some(value) = self.0.get(key).cloned() {
+        if let Some(value) = self.data.get(key).cloned() {
             Some(value)
         } else {
             Some("NOK".parse::<Value>().unwrap())
@@ -25,20 +39,20 @@ impl Storage {
 
     /// Return a reference to a value corresponding to a key.
     async fn request_delete(&mut self, key: &Key) -> &'static str {
-        self.0.remove(key);
+        self.data.remove(key);
         "OK"
     }
 
     /// Set a key value in the store.
     /// If the key already exists, the value will be updated.
     async fn request_set(&mut self, key: Key, value: Value) -> &'static str {
-        self.0.insert(key, value);
+        self.data.insert(key, value);
         "OK"
     }
 
     /// Return a reference to a value corresponding to a key.
     async fn get(&self, key: &Key) -> Option<Value> {
-        if let Some(value) = self.0.get(key).cloned() {
+        if let Some(value) = self.data.get(key).cloned() {
             Some(value)
         } else {
             Some("NOK".parse::<Value>().unwrap())
@@ -47,19 +61,25 @@ impl Storage {
 
     /// Return a reference to a value corresponding to a key.
     async fn delete(&mut self, key: &Key) -> &'static str {
-        self.0.remove(key);
+        self.data.remove(key);
         "OK"
     }
 
     /// Set a key value in the store.
     /// If the key already exists, the value will be updated.
     async fn set(&mut self, key: Key, value: Value) -> &'static str {
-        self.0.insert(key, value);
+        self.data.insert(key, value);
         "OK"
     }
 
     /// Query the storage.
     pub async fn query(&mut self, cmd: Command) -> Option<Value> {
+        if let Some(ref mut runtime) = self.runtime {
+            println!("{}", runtime.server);
+            if let Command::Invalid(_) = cmd.clone() {
+                runtime.server.client_append_entry(cmd.clone());
+            }
+        }
         match cmd {
             Command::Get { key } => self.get(&key).await,
             Command::Delete { key } => {

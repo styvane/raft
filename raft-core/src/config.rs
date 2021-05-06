@@ -29,7 +29,7 @@ impl Cluster {
     }
 
     /// Create a cluster configuration from a path.
-    pub fn from_path(path: PathBuf) -> anyhow::Result<Self> {
+    pub fn from_path(path: &PathBuf) -> anyhow::Result<Self> {
         let mut cfg = Configure::new();
         cfg.merge(File::with_name(path.to_str().unwrap()))?;
         let cfg = cfg.try_into::<Self>()?;

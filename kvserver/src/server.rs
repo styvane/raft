@@ -6,12 +6,13 @@ use async_std::channel::{self, Receiver, Sender};
 use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
+use raft_core::config::Cluster;
 use raft_core::runtime::Runtime;
 use raft_utils::Transport;
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::Arc;
 use structopt::StructOpt;
-
 const CONNEXION_MAX: usize = 100;
 
 #[derive(Debug, StructOpt, Deserialize)]
@@ -22,19 +23,26 @@ pub struct ServerOptions {
 
     #[structopt(long, short, default_value = "21000")]
     port: usize,
+
+    /// The identifier of this node in the cluster configuration.
+    #[structopt(short, long)]
+    pub node_id: usize,
+
+    /// Path to the configuration file.
+    #[structopt(short, long, parse(from_os_str))]
+    pub config: PathBuf,
 }
 
 /// The `Server` type represents the storage server
 pub struct Server {
     options: ServerOptions,
-    runtime: Runtime<Command>,
+    //  runtime: Runtime<Command>,
 }
 
 impl Server {
     /// Create a new server.
     pub fn new(options: ServerOptions) -> Self {
-        let runtime = Runtime::new().unwrap();
-        Server { options, runtime }
+        Server { options }
     }
 
     /// Read a stream and send the event throught a channel.
@@ -73,7 +81,10 @@ impl Server {
             TcpListener::bind(format!("{}:{}", self.options.bind_ip, self.options.port)).await?;
 
         let (broker_tx, broker_rx) = channel::bounded(CONNEXION_MAX);
-        let _broker_handle = task::spawn(Event::response_broker(broker_rx));
+        let config = Cluster::from_path(&self.options.config).unwrap();
+
+        let runtime = Runtime::new(self.options.node_id, config).unwrap();
+        let _broker_handle = task::spawn(Event::response_broker(broker_rx, runtime));
         while let Some(stream) = listener.incoming().next().await {
             let stream = stream?;
             let stream = Arc::new(stream);

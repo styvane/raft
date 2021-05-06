@@ -671,7 +671,6 @@ dependencies = [
  "rand",
  "serde 1.0.125",
  "serde_json",
- "structopt",
 ]
 
 [[package]]

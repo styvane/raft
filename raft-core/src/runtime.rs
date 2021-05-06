@@ -2,7 +2,7 @@
 
 use crate::config::Cluster;
 use crate::event::Message;
-use crate::server::{Server, ServerArgs};
+use crate::server::Server;
 use anyhow;
 use async_std::channel::{self, Receiver, Sender};
 use async_std::net::{TcpListener, TcpStream};
@@ -18,12 +18,12 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
-use structopt::StructOpt;
 
-const ELECTION_TIMEOUT_MIN: u64 = 200;
-const ELECTION_TIMEOUT_MAX: u64 = 300;
+const ELECTION_TIMEOUT_MIN: u64 = 5;
+const ELECTION_TIMEOUT_MAX: u64 = 10;
 
 /// The `Runtime` type is the Raft runtime.
+#[derive(Debug)]
 pub struct Runtime<V> {
     pub server: Server<V>,
     pub netaddr: String,
@@ -64,12 +64,9 @@ where
         let _handle = task::spawn(Self::connect(netaddr, broker_tx));
     }
 
-    pub fn new() -> anyhow::Result<Self> {
-        let opt = ServerArgs::from_args();
-        let config = Cluster::from_path(opt.config)?;
-        let netaddr = config.get(&opt.node_id).hostname().to_string();
-        let server = Server::new(opt.node_id, config);
-
+    pub fn new(node_id: usize, config: Cluster) -> anyhow::Result<Self> {
+        let netaddr = config.get(&node_id).hostname().to_string();
+        let server = Server::new(node_id, config);
         Ok(Self { server, netaddr })
     }
 
@@ -109,6 +106,7 @@ where
     pub async fn launch_broker(mut messages: Receiver<Event<V>>, mut runtime: Runtime<V>) {
         let mut connections = HashMap::new();
         loop {
+            println!("{}", runtime.server);
             while let Some(event) = messages.next().await {
                 match event {
                     Event::Connection { peer, chan } => {

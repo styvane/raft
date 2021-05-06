@@ -12,20 +12,6 @@ use std::cmp;
 use std::collections::vec_deque::Drain;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
-use std::path::PathBuf;
-use structopt::StructOpt;
-
-#[derive(Debug, StructOpt)]
-#[structopt(name = "raftd", rename_all = "kebab-case")]
-pub struct ServerArgs {
-    /// The identifier of this node in the cluster configuration.
-    #[structopt(short, long)]
-    pub node_id: usize,
-
-    /// Path to the configuration file.
-    #[structopt(short, long, parse(from_os_str))]
-    pub config: PathBuf,
-}
 
 /// The type `Server` is the raft server.
 #[derive(Debug)]
@@ -91,12 +77,13 @@ where
 
         write!(
             f,
-            "Server<id={}, term={:?}, role={},  commit_index={}, vote_for={}, log={:?}>",
+            "Server<id={}, term={:?}, role={},  commit_index={}, vote_for={}, messages={:?}, log={:?}>",
             self.config.get(&self.id).hostname(),
             self.current_term,
             self.role,
             commit_index,
             vote_for,
+            self.messages,
             self.log
         )
     }
@@ -263,6 +250,9 @@ where
     fn send_append_entries(&mut self, peer: &str) {
         // Get the previous log entry for this peer.
 
+        if !self.next_index.contains_key(peer) {
+            return;
+        }
         let index = self.next_index[peer];
 
         // See TLA⁺ spec. L206-210
