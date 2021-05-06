@@ -8,9 +8,10 @@ use crate::event::{
 };
 use crate::log::{Entry, Log};
 use crate::types::{Index, Term};
+use async_std::channel::Sender;
+use async_std::task;
 use std::cmp;
-use std::collections::vec_deque::Drain;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 /// The type `Server` is the raft server.
@@ -57,7 +58,7 @@ pub struct Server<V> {
     has_heard_from_leader: bool,
 
     // Emitted server events and destination.
-    messages: VecDeque<Message<V>>,
+    messages: Sender<Message<V>>,
 }
 
 impl<V> fmt::Display for Server<V>
@@ -94,7 +95,7 @@ where
     V: Clone + fmt::Debug,
 {
     /// Create new Raft server.
-    pub fn new(id: usize, config: Cluster) -> Self {
+    pub fn new(id: usize, config: Cluster, messages: Sender<Message<V>>) -> Self {
         let size = config.size();
         Server {
             id,
@@ -110,12 +111,12 @@ where
             votes: HashMap::with_capacity(size),
             followers_heartbeat: HashSet::with_capacity(size),
             has_heard_from_leader: false,
-            messages: VecDeque::new(),
+            messages,
         }
     }
 
     /// Create new Raft server with a existing log.
-    pub fn with_log(id: usize, config: Cluster, log: Log<V>) -> Self {
+    pub fn with_log(id: usize, config: Cluster, messages: Sender<Message<V>>, log: Log<V>) -> Self {
         let next_index: HashMap<String, usize> = config
             .members_iter()
             .map(|x| (x.hostname().to_string(), 0))
@@ -136,7 +137,7 @@ where
             votes: HashMap::with_capacity(size),
             followers_heartbeat: HashSet::with_capacity(size),
             has_heard_from_leader: false,
-            messages: VecDeque::new(),
+            messages,
         }
     }
 
@@ -279,7 +280,16 @@ where
             &peer,
         );
 
-        self.messages.push_back(Message::new(&peer, event));
+        self.send(peer, event);
+    }
+
+    /// Send the message out.
+    fn send(&mut self, peer: &str, event: Event<V>) {
+        task::block_on(async {
+            if let Err(error) = self.messages.send(Message::new(&peer, event)).await {
+                eprintln!("{:?}", error);
+            }
+        });
     }
 
     /// Handle AppendEntries request from the leader.
@@ -333,7 +343,7 @@ where
             &dest,
             &source,
         );
-        self.messages.push_back(Message::new(&source, resp));
+        self.send(&source, resp);
     }
 
     /// Handle AppendEntries RPC response from a server.
@@ -390,7 +400,7 @@ where
 
     /// Send a vote request to all peers.
     pub fn broadcast_request_vote(&mut self) {
-        for peer in self.config.members_iter().map(|x| x.hostname()) {
+        for peer in self.config.clone().members_iter().map(|x| x.hostname()) {
             if !self.votes.contains_key(peer) {
                 let event: Event<V> = Event::new_request_vote(
                     self.current_term,
@@ -400,7 +410,7 @@ where
                     peer,
                 );
 
-                self.messages.push_back(Message::new(peer, event));
+                self.send(peer, event);
             }
         }
     }
@@ -440,12 +450,7 @@ where
         let resp: Event<V> =
             Event::new_request_vote_response(self.current_term, vote, &dest, &source);
 
-        self.messages.push_back(Message::new(&source, resp));
-    }
-
-    /// Consume all outgoing messages.
-    pub fn consume_messages(&mut self) -> Drain<'_, Message<V>> {
-        self.messages.drain(..)
+        self.send(&source, resp);
     }
 
     /// Handle a request vote response from a peer.
@@ -517,33 +522,28 @@ impl fmt::Display for Role {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_std::channel::{bounded, Receiver};
     use config::FileFormat;
 
-    fn process_events(servers: &mut [Server<char>]) {
+    fn process_events(servers: &mut [Server<char>], messages: &Vec<Receiver<Message<char>>>) {
         loop {
-            let mut messages = VecDeque::new();
-            for srv in servers.iter_mut() {
-                messages.extend(srv.consume_messages());
+            for receiver in messages {
+                while let Ok(Message { dest, event }) = receiver.try_recv() {
+                    servers
+                        .iter_mut()
+                        .find(|srv| srv.config.get(&srv.id).hostname() == dest)
+                        .unwrap()
+                        .handle_message(event);
+                }
             }
 
-            if messages.is_empty() {
+            if servers.iter().all(|x| x.messages.is_empty()) {
                 break;
-            }
-
-            while let Some(Message { dest, event }) = messages.pop_front() {
-                servers
-                    .iter_mut()
-                    .find(|srv| srv.config.get(&srv.id).hostname() == dest)
-                    .unwrap()
-                    .handle_message(event);
             }
         }
     }
 
-    fn fig7_paper_servers() -> Vec<Server<char>> {
-        let size = 7;
-        let mut servers = Vec::with_capacity(size);
-
+    fn fig7_paper_servers() -> (Vec<Server<char>>, Vec<Receiver<Message<char>>>) {
         let config = Cluster::from_str(
             r#"
 	        id = "raft"
@@ -584,17 +584,24 @@ mod tests {
             FileFormat::Toml,
         )
         .unwrap();
+
+        let size = 7;
+        let mut servers = Vec::with_capacity(size);
+
+        let mut receivers = Vec::with_capacity(size);
         for (i, log) in setup_logs_scenario_paper_fig7().into_iter().enumerate() {
             let term = log.previous_term();
-            let mut srv = Server::with_log(i, config.clone(), log);
+            let (tx, rx) = bounded(100);
+            let mut srv = Server::with_log(i, config.clone(), tx, log);
             srv.current_term = term;
             servers.push(srv);
+            receivers.push(rx);
         }
 
-        return servers;
+        return (servers, receivers);
     }
 
-    fn new_servers() -> Vec<Server<char>> {
+    fn new_servers() -> (Vec<Server<char>>, Vec<Receiver<Message<char>>>) {
         let size = 5;
         let mut servers = Vec::with_capacity(size);
 
@@ -628,24 +635,27 @@ mod tests {
             FileFormat::Toml,
         )
         .unwrap();
+        let mut messages = Vec::with_capacity(size);
         for i in 0..size {
-            let srv = Server::new(i, config.clone());
+            let (tx, rx) = bounded(10);
+            let srv = Server::new(i, config.clone(), tx);
             servers.push(srv);
+            messages.push(rx);
         }
 
-        return servers;
+        return (servers, messages);
     }
 
     #[test]
     fn test_log_replication_scenario_paper_fig7() {
-        let mut servers = fig7_paper_servers();
+        let (mut servers, mut receivers) = fig7_paper_servers();
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
             srv0.client_append_entry('m');
         }
 
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
 
         for srv in servers[0..7].iter() {
             assert_eq!(
@@ -671,7 +681,8 @@ mod tests {
             FileFormat::Toml,
         )
         .unwrap();
-        let mut srv: Server<()> = Server::new(0, cfg);
+        let (tx, _) = bounded(0);
+        let mut srv: Server<()> = Server::new(0, cfg, tx);
         assert_eq!(srv.role, Role::Follower);
         srv.become_leader();
     }
@@ -689,7 +700,8 @@ mod tests {
             FileFormat::Toml,
         )
         .unwrap();
-        let mut srv: Server<()> = Server::new(0, cfg);
+        let (tx, _) = bounded(1);
+        let mut srv: Server<()> = Server::new(0, cfg, tx);
 
         assert_eq!(srv.role, Role::Follower);
         srv.become_candidate();
@@ -713,7 +725,8 @@ mod tests {
             FileFormat::Toml,
         )
         .unwrap();
-        let mut srv: Server<()> = Server::new(0, cfg);
+        let (tx, _) = bounded(1);
+        let mut srv: Server<()> = Server::new(0, cfg, tx);
         assert_eq!(srv.role, Role::Follower);
         srv.become_candidate();
         assert_eq!(srv.role, Role::Candidate);
@@ -737,21 +750,22 @@ mod tests {
             FileFormat::Toml,
         )
         .unwrap();
-        let mut srv: Server<()> = Server::new(0, cfg);
+        let (tx, _) = bounded(1);
+        let mut srv: Server<()> = Server::new(0, cfg, tx);
         srv.role = Role::Leader;
         srv.become_candidate();
     }
 
     #[test]
     fn test_consensus_log_replication_paper_fig7() {
-        let mut servers = fig7_paper_servers();
+        let (mut servers, mut receivers) = fig7_paper_servers();
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
             srv0.client_append_entry('m');
         }
 
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
 
         assert_eq!(servers[0].last_applied, Some(11));
 
@@ -760,7 +774,7 @@ mod tests {
             srv0.client_append_entry('m');
         }
 
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
         assert_eq!(servers[0].last_applied, Some(12));
         for srv in servers[1..7].iter() {
             assert_eq!(
@@ -775,13 +789,13 @@ mod tests {
 
     #[test]
     fn test_election_paper_fig7() {
-        let mut servers = fig7_paper_servers();
+        let (mut servers, mut receivers) = fig7_paper_servers();
         {
             let srv0 = &mut servers[0];
             srv0.log.entries.pop();
             srv0.become_candidate();
         }
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
 
         assert_eq!(servers[0].votes.get("0").unwrap().granted, true);
         assert_eq!(servers[0].votes.get("1").unwrap().granted, true);
@@ -794,12 +808,12 @@ mod tests {
 
     #[test]
     fn test_server2_cannot_become_leader_paper_fig7() {
-        let mut servers = fig7_paper_servers();
+        let (mut servers, mut receivers) = fig7_paper_servers();
         {
             let srv2 = &mut servers[2];
             srv2.become_candidate();
         }
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
 
         assert_eq!(servers[2].votes.get("0").unwrap().granted, false);
         assert_eq!(servers[2].votes.get("1").unwrap().granted, false);
@@ -818,7 +832,7 @@ mod tests {
 
     #[test]
     fn test_heartbeat_paper_fig7() {
-        let mut servers = fig7_paper_servers();
+        let (mut servers, mut receivers) = fig7_paper_servers();
         for srv in servers[..].iter() {
             assert!(!srv.has_heard_from_leader);
         }
@@ -830,7 +844,7 @@ mod tests {
             srv0.election_timeout();
         }
 
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
 
         for srv in servers[1..].iter() {
             assert!(srv.has_heard_from_leader);
@@ -842,7 +856,7 @@ mod tests {
 
     #[test]
     fn test_election_timeout_paper_fig7() {
-        let mut servers = fig7_paper_servers();
+        let (mut servers, mut receivers) = fig7_paper_servers();
         for srv in servers[..].iter() {
             assert!(!srv.has_heard_from_leader);
         }
@@ -879,14 +893,14 @@ mod tests {
         assert_eq!(servers[2].role, Role::Candidate);
         assert_eq!(servers[2].current_term, Some(6));
 
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
         assert_eq!(servers[0].role, Role::Leader);
         assert_eq!(servers[2].role, Role::Follower);
     }
 
     #[test]
     fn test_received_heartbeat_during_election_paper_fig7() {
-        let mut servers = fig7_paper_servers();
+        let (mut servers, mut receivers) = fig7_paper_servers();
         for srv in servers[..].iter() {
             assert!(!srv.has_heard_from_leader);
         }
@@ -912,20 +926,20 @@ mod tests {
             srv0.client_append_entry('m');
         }
 
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
         assert_eq!(servers[0].role, Role::Leader);
         assert_eq!(servers[2].role, Role::Follower);
     }
 
     #[test]
     fn test_new_servers() {
-        let mut servers = new_servers();
+        let (mut servers, mut receivers) = new_servers();
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
         }
 
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
 
         assert_eq!(servers[0].role, Role::Leader);
         for srv in servers[1..5].iter() {
@@ -951,7 +965,7 @@ mod tests {
             let srv0 = &mut servers[0];
             srv0.client_append_entry('a');
         }
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
         assert_eq!(servers[0].last_applied, Some(0));
         for srv in servers[1..5].iter() {
             assert_eq!(
@@ -967,7 +981,7 @@ mod tests {
             let srv0 = &mut servers[0];
             srv0.client_append_entry('b');
         }
-        process_events(&mut servers);
+        process_events(&mut servers, &mut receivers);
         assert_eq!(servers[0].last_applied, Some(1));
         for srv in servers[1..5].iter() {
             assert_eq!(
