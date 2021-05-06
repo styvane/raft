@@ -26,7 +26,7 @@ impl FromStr for Value {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum Command {
     Get { key: Key },
     Set { key: Key, value: Value },

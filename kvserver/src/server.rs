@@ -6,10 +6,10 @@ use async_std::channel::{self, Receiver, Sender};
 use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
+use raft_core::runtime::Runtime;
 use raft_utils::Transport;
 use serde::Deserialize;
 use std::sync::Arc;
-
 use structopt::StructOpt;
 
 const CONNEXION_MAX: usize = 100;
@@ -27,12 +27,14 @@ pub struct ServerOptions {
 /// The `Server` type represents the storage server
 pub struct Server {
     options: ServerOptions,
+    runtime: Runtime<Command>,
 }
 
 impl Server {
     /// Create a new server.
     pub fn new(options: ServerOptions) -> Self {
-        Server { options }
+        let runtime = Runtime::new().unwrap();
+        Server { options, runtime }
     }
 
     /// Read a stream and send the event throught a channel.

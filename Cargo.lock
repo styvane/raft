@@ -450,6 +450,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-std",
+ "raft-core",
  "raft-utils",
  "rustyline",
  "serde 1.0.125",
@@ -670,6 +671,7 @@ dependencies = [
  "rand",
  "serde 1.0.125",
  "serde_json",
+ "structopt",
 ]
 
 [[package]]
