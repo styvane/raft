@@ -3,7 +3,6 @@
 //! This module contains the Raft server implementation.
 
 use crate::config::Cluster;
-
 use crate::event::{
     AppendEntries, AppendEntriesResponse, Event, Message, RequestVote, RequestVoteResponse, Vote,
 };
@@ -13,6 +12,20 @@ use std::cmp;
 use std::collections::vec_deque::Drain;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::path::PathBuf;
+use structopt::StructOpt;
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "raftd", rename_all = "kebab-case")]
+pub struct ServerArgs {
+    /// The identifier of this node in the cluster configuration.
+    #[structopt(short, long)]
+    pub node_id: usize,
+
+    /// Path to the configuration file.
+    #[structopt(short, long, parse(from_os_str))]
+    pub config: PathBuf,
+}
 
 /// The type `Server` is the raft server.
 #[derive(Debug)]
@@ -299,15 +312,10 @@ where
         self.update_term(term);
         self.has_heard_from_leader = true;
 
-        let success = if {
-            self.log
-                .append_entries(previous_index, previous_term, &entries)
-                .is_ok()
-        } {
-            true
-        } else {
-            false
-        };
+        let success = self
+            .log
+            .append_entries(previous_index, previous_term, &entries)
+            .is_ok();
 
         if success {
             // Update self commit index to the minimum value between the leader commit index
@@ -354,9 +362,8 @@ where
             // The next log to send is the log at the index immediately
             // after match index.
             // See TLA⁺ spec L395
-            if match_index.is_some() {
-                self.next_index
-                    .insert(source.clone(), match_index.unwrap() + 1);
+            if let Some(index) = match_index {
+                self.next_index.insert(source.clone(), index + 1);
             }
             // Update match index.
             // See TLA⁺ spec L396.
@@ -478,7 +485,7 @@ where
     }
 
     /// Handle all possible normal events in the server.
-    pub fn handle(&mut self, event: Event<V>) {
+    pub fn handle_message(&mut self, event: Event<V>) {
         match event {
             Event::AppendEntries(event) => self.handle_append_entries_request(event),
             Event::AppendEntriesResponse(event) => self.handle_append_entries_response(event),
@@ -538,7 +545,7 @@ mod tests {
                     .iter_mut()
                     .find(|srv| srv.config.get(&srv.id).hostname() == dest)
                     .unwrap()
-                    .handle(event);
+                    .handle_message(event);
             }
         }
     }
@@ -547,7 +554,7 @@ mod tests {
         let size = 7;
         let mut servers = Vec::with_capacity(size);
 
-        let config = Cluster::init_from_str(
+        let config = Cluster::from_str(
             r#"
 	        id = "raft"
 
@@ -601,7 +608,7 @@ mod tests {
         let size = 5;
         let mut servers = Vec::with_capacity(size);
 
-        let config = Cluster::init_from_str(
+        let config = Cluster::from_str(
             r#"
 	        id = "raft"
 
@@ -663,7 +670,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_not_transition_leader_without_being_candidate() {
-        let cfg = Cluster::init_from_str(
+        let cfg = Cluster::from_str(
             r#"
 	        id = "raft"
 
@@ -681,7 +688,7 @@ mod tests {
 
     #[test]
     fn test_become_candidate() {
-        let cfg = Cluster::init_from_str(
+        let cfg = Cluster::from_str(
             r#"
 	        id = "raft"
 
@@ -705,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_become_leader() {
-        let cfg = Cluster::init_from_str(
+        let cfg = Cluster::from_str(
             r#"
 	        id = "raft"
 
@@ -729,7 +736,7 @@ mod tests {
     #[test]
     #[should_panic]
     fn test_leader_cannot_become_candidate() {
-        let cfg = Cluster::init_from_str(
+        let cfg = Cluster::from_str(
             r#"
 	        id = "raft"
 

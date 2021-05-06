@@ -2,7 +2,7 @@
 
 use crate::config::Cluster;
 use crate::event::Message;
-use crate::server::Server;
+use crate::server::{Server, ServerArgs};
 use anyhow;
 use async_std::channel::{self, Receiver, Sender};
 use async_std::net::{TcpListener, TcpStream};
@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
+use structopt::StructOpt;
 
 const ELECTION_TIMEOUT_MIN: u64 = 200;
 const ELECTION_TIMEOUT_MAX: u64 = 300;
@@ -25,6 +26,7 @@ const ELECTION_TIMEOUT_MAX: u64 = 300;
 /// The `Runtime` type is the Raft runtime.
 pub struct Runtime<V> {
     pub server: Server<V>,
+    pub netaddr: String,
 }
 
 #[derive(Debug)]
@@ -52,18 +54,30 @@ where
     V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     /// Start the runtime server
-    pub async fn start() {}
-
-    /// Accept incoming connection.
-    pub async fn connect(config: Cluster, node_id: usize) -> anyhow::Result<()> {
-        // Accept connection
-        let me = config.get(&&node_id);
-        let addr = me.hostname();
+    pub async fn start(runtime: Runtime<V>) {
+        let netaddr = runtime.netaddr.clone();
         let (broker_tx, broker_rx) = channel::unbounded();
-        let _handle = task::spawn(Self::launch_broker(broker_rx));
+        let _handle = task::spawn(Self::launch_broker(broker_rx, runtime));
         let _handle = task::spawn(Self::election_timeout(broker_tx.clone()));
         let _handle = task::spawn(Self::emit_heartbeat(broker_tx.clone()));
-        let listener = TcpListener::bind(addr).await?;
+
+        let _handle = task::spawn(Self::connect(netaddr, broker_tx));
+    }
+
+    pub fn new() -> anyhow::Result<Self> {
+        let opt = ServerArgs::from_args();
+        let config = Cluster::from_path(opt.config)?;
+        let netaddr = config.get(&opt.node_id).hostname().to_string();
+        let server = Server::new(opt.node_id, config);
+
+        Ok(Self { server, netaddr })
+    }
+
+    /// Accept incoming connection from peers.
+    ///
+    /// It also spawns tasks to exchange messages with peers.
+    pub async fn connect(netaddr: String, broker_sender: Sender<Event<V>>) -> anyhow::Result<()> {
+        let listener = TcpListener::bind(netaddr).await?;
         let mut incoming = listener.incoming();
         while let Some(stream) = incoming.next().await {
             // do something with the stream.
@@ -77,14 +91,14 @@ where
                 Ok(peer) => {
                     let peer = format!("{}:{}", peer.ip(), peer.port());
                     let event = Event::new_connection(&peer, tx);
-                    if let Err(error) = broker_tx.send(event).await {
+                    if let Err(error) = broker_sender.clone().send(event).await {
                         eprintln!("{:?}", error);
                         continue;
                     }
                     let stream = Arc::new(stream);
                     let _handle = task::spawn(Self::send_message(rx, stream.clone()));
                     let _handle =
-                        task::spawn(Self::recv_message(broker_tx.clone(), stream.clone()));
+                        task::spawn(Self::recv_message(broker_sender.clone(), stream.clone()));
                 }
             }
         }
@@ -92,9 +106,8 @@ where
         Ok(())
     }
 
-    pub async fn launch_broker(mut messages: Receiver<Event<V>>) {
+    pub async fn launch_broker(mut messages: Receiver<Event<V>>, mut runtime: Runtime<V>) {
         let mut connections = HashMap::new();
-
         loop {
             while let Some(event) = messages.next().await {
                 match event {
@@ -102,9 +115,9 @@ where
                         connections.insert(peer, chan);
                     }
 
-                    Event::Election => {}
-                    Event::HeartBeat => {}
-                    Event::Message(msg) => {}
+                    Event::Election => runtime.server.election_timeout(),
+                    Event::HeartBeat => runtime.server.send_leader_heartbeat(),
+                    Event::Message(msg) => runtime.server.handle_message(msg.event),
                 }
             }
         }

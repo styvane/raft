@@ -2,7 +2,9 @@
 
 use config::{Config as Configure, File, FileFormat};
 use serde::Deserialize;
+use std::path::PathBuf;
 use std::slice::Iter;
+
 /// Cluster member configuration.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Member {
@@ -19,9 +21,17 @@ pub struct Cluster {
 
 impl Cluster {
     /// Create a cluster configuration from a string.
-    pub fn init_from_str(data: &str, format: FileFormat) -> anyhow::Result<Self> {
+    pub fn from_str(data: &str, format: FileFormat) -> anyhow::Result<Self> {
         let mut cfg = Configure::new();
         cfg.merge(File::from_str(data, format))?;
+        let cfg = cfg.try_into::<Self>()?;
+        Ok(cfg)
+    }
+
+    /// Create a cluster configuration from a path.
+    pub fn from_path(path: PathBuf) -> anyhow::Result<Self> {
+        let mut cfg = Configure::new();
+        cfg.merge(File::with_name(path.to_str().unwrap()))?;
         let cfg = cfg.try_into::<Self>()?;
         Ok(cfg)
     }
@@ -61,7 +71,7 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let config = Cluster::init_from_str(
+        let config = Cluster::from_str(
             r#"
 	        id = "raft"
                 [[members]]
