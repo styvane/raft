@@ -14,6 +14,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -34,19 +35,16 @@ pub enum Event<T> {
     HeartBeat,
     Election,
     Message(Message<T>),
-    NewPeer {
-        peer: String,
-        chan: Sender<Message<T>>,
-    },
+    NewPeer { stream: Arc<TcpStream> },
 }
 
 impl<T> Event<T> {
-    pub fn new_peer(peer: &str, chan: Sender<Message<T>>) -> Self {
-        Self::NewPeer {
-            peer: peer.to_string(),
-            chan,
-        }
-    }
+    // pub fn new_peer(peer: &str, chan: Sender<Message<T>>) -> Self {
+    //     Self::NewPeer {
+    //         peer: peer.to_string(),
+    //         chan,
+    //     }
+    // }
 }
 
 impl<V> Runtime<V>
@@ -57,11 +55,10 @@ where
     pub async fn start(runtime: Runtime<V>) {
         let netaddr = runtime.netaddr.clone();
         let (broker_tx, broker_rx) = channel::unbounded();
-        let _handle = task::spawn(Self::launch_broker(broker_rx, runtime.server));
+        //let _handle = task::spawn(Self::launch_broker(broker_rx, runtime.server));
         let _handle = task::spawn(Self::election_timeout(broker_tx.clone()));
         let _handle = task::spawn(Self::emit_heartbeat(broker_tx.clone()));
-
-        let _handle = task::spawn(Self::connect(netaddr, broker_tx));
+        let _handle = task::spawn(Self::accept(netaddr, broker_tx));
     }
 
     pub fn new(
@@ -77,50 +74,51 @@ where
     /// Accept incoming connection from peers.
     ///
     /// It also spawns tasks to exchange messages with peers.
-    pub async fn connect(netaddr: String, broker_sender: Sender<Event<V>>) -> anyhow::Result<()> {
+    pub async fn accept(netaddr: String, broker_sender: Sender<Event<V>>) -> anyhow::Result<()> {
         let listener = TcpListener::bind(netaddr).await?;
         let mut incoming = listener.incoming();
         while let Some(stream) = incoming.next().await {
             // do something with the stream.
             let stream = stream?;
-            let (tx, rx) = channel::unbounded();
-            match stream.peer_addr() {
-                Err(error) => {
-                    eprintln!("{:?}", error);
-                    continue;
-                }
-                Ok(peer) => {
-                    let peer = format!("{}:{}", peer.ip(), peer.port());
-                    let event = Event::new_peer(&peer, tx);
-                    if let Err(error) = broker_sender.clone().send(event).await {
-                        eprintln!("{:?}", error);
-                        continue;
-                    }
-                    let stream = Arc::new(stream);
-                    let _handle = task::spawn(Self::send_message(rx, stream.clone()));
-                    let _handle =
-                        task::spawn(Self::recv_message(broker_sender.clone(), stream.clone()));
-                }
+            let stream = Arc::new(stream);
+            let event = Event::NewPeer {
+                stream: stream.clone(),
+            };
+            if let Err(error) = broker_sender.clone().send(event).await {
+                eprintln!("{:?}", error);
+                continue;
             }
-        }
 
+            let _handle = task::spawn(Self::recv_message(broker_sender.clone(), stream.clone()));
+        }
         Ok(())
     }
 
-    pub async fn launch_broker(mut incoming: Receiver<Event<V>>, mut server: Server<V>) {
+    pub async fn message_broker(
+        mut incoming: Receiver<Event<V>>,
+        outgoing: Receiver<Message<V>>,
+        mut server: Server<V>,
+    ) {
         let mut connections = HashMap::new();
-        //let mut incoming = incoming.;
-
         loop {
             while let Some(event) = incoming.next().await {
                 match event {
-                    Event::NewPeer { peer, chan } => {
-                        connections.insert(peer, chan);
-                    }
-
                     Event::Election => server.election_timeout(),
                     Event::HeartBeat => server.send_leader_heartbeat(),
                     Event::Message(msg) => server.handle_message(msg.event),
+                    Event::NewPeer { stream } => {
+                        if let Ok(addr) = stream.as_ref().peer_addr() {
+                            match connections.entry(addr) {
+                                Entry::Vacant(entry) => {
+                                    let (tx, rx) = channel::unbounded();
+                                    entry.insert(tx);
+                                    let _handle =
+                                        task::spawn(Self::send_message(rx, stream.clone()));
+                                }
+                                _ => (),
+                            }
+                        }
+                    }
                 }
             }
         }
