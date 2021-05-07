@@ -83,8 +83,9 @@ impl Server {
         let (broker_tx, broker_rx) = channel::bounded(CONNEXION_MAX);
         let config = Cluster::from_path(&self.options.config).unwrap();
 
-        let runtime = Runtime::new(self.options.node_id, config).unwrap();
-        let _broker_handle = task::spawn(Event::response_broker(broker_rx, runtime));
+        // let (out, in) = channel::unbounded();
+        // let runtime = Runtime::new(self.options.node_id, config, out).unwrap();
+        let _broker_handle = task::spawn(Event::response_broker(broker_rx));
         while let Some(stream) = listener.incoming().next().await {
             let stream = stream?;
             let stream = Arc::new(stream);

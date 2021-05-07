@@ -34,15 +34,15 @@ pub enum Event<T> {
     HeartBeat,
     Election,
     Message(Message<T>),
-    Connection {
+    NewPeer {
         peer: String,
         chan: Sender<Message<T>>,
     },
 }
 
 impl<T> Event<T> {
-    pub fn new_connection(peer: &str, chan: Sender<Message<T>>) -> Self {
-        Self::Connection {
+    pub fn new_peer(peer: &str, chan: Sender<Message<T>>) -> Self {
+        Self::NewPeer {
             peer: peer.to_string(),
             chan,
         }
@@ -57,16 +57,20 @@ where
     pub async fn start(runtime: Runtime<V>) {
         let netaddr = runtime.netaddr.clone();
         let (broker_tx, broker_rx) = channel::unbounded();
-        let _handle = task::spawn(Self::launch_broker(broker_rx, runtime));
+        let _handle = task::spawn(Self::launch_broker(broker_rx, runtime.server));
         let _handle = task::spawn(Self::election_timeout(broker_tx.clone()));
         let _handle = task::spawn(Self::emit_heartbeat(broker_tx.clone()));
 
         let _handle = task::spawn(Self::connect(netaddr, broker_tx));
     }
 
-    pub fn new(node_id: usize, config: Cluster) -> anyhow::Result<Self> {
+    pub fn new(
+        node_id: usize,
+        config: Cluster,
+        messages: Sender<Message<V>>,
+    ) -> anyhow::Result<Self> {
         let netaddr = config.get(&node_id).hostname().to_string();
-        let server = Server::new(node_id, config);
+        let server = Server::new(node_id, config, messages);
         Ok(Self { server, netaddr })
     }
 
@@ -87,7 +91,7 @@ where
                 }
                 Ok(peer) => {
                     let peer = format!("{}:{}", peer.ip(), peer.port());
-                    let event = Event::new_connection(&peer, tx);
+                    let event = Event::new_peer(&peer, tx);
                     if let Err(error) = broker_sender.clone().send(event).await {
                         eprintln!("{:?}", error);
                         continue;
@@ -103,19 +107,20 @@ where
         Ok(())
     }
 
-    pub async fn launch_broker(mut messages: Receiver<Event<V>>, mut runtime: Runtime<V>) {
+    pub async fn launch_broker(mut incoming: Receiver<Event<V>>, mut server: Server<V>) {
         let mut connections = HashMap::new();
+        //let mut incoming = incoming.;
+
         loop {
-            println!("{}", runtime.server);
-            while let Some(event) = messages.next().await {
+            while let Some(event) = incoming.next().await {
                 match event {
-                    Event::Connection { peer, chan } => {
+                    Event::NewPeer { peer, chan } => {
                         connections.insert(peer, chan);
                     }
 
-                    Event::Election => runtime.server.election_timeout(),
-                    Event::HeartBeat => runtime.server.send_leader_heartbeat(),
-                    Event::Message(msg) => runtime.server.handle_message(msg.event),
+                    Event::Election => server.election_timeout(),
+                    Event::HeartBeat => server.send_leader_heartbeat(),
+                    Event::Message(msg) => server.handle_message(msg.event),
                 }
             }
         }

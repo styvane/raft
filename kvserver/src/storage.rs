@@ -95,6 +95,30 @@ impl Storage {
             Command::Invalid(value) => Some(value.parse::<Value>().unwrap()),
         }
     }
+
+    /// Request query the storage.
+    pub async fn request_query(&mut self, cmd: Command) -> Option<Value> {
+        if let Some(ref mut runtime) = self.runtime {
+            println!("{}", runtime.server);
+            if let Command::Invalid(_) = cmd.clone() {
+                runtime.server.client_append_entry(cmd.clone());
+            }
+        }
+        match cmd {
+            Command::Get { key } => self.get(&key).await,
+            Command::Delete { key } => {
+                let value = self.delete(&key).await;
+                let value: Value = value.parse().unwrap();
+                Some(value)
+            }
+            Command::Set { key, value } => {
+                let value = self.set(key, value).await;
+                let value: Value = value.parse().unwrap();
+                Some(value)
+            }
+            Command::Invalid(value) => Some(value.parse::<Value>().unwrap()),
+        }
+    }
 }
 
 #[cfg(test)]

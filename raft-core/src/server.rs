@@ -153,6 +153,7 @@ where
             "Only candidate can become leader after winning an election"
         );
 
+        println!("{}", self);
         self.role = Role::Leader;
         // Leader initializes all the next index for each follower.
         // See TLA⁺ spec L232
@@ -184,6 +185,7 @@ where
             "leader should never became candidate or follower"
         );
 
+        println!("{}", self);
         // After becoming a candidate, increase self current term.
         // See TLA⁺ spec.
         self.current_term
@@ -238,6 +240,7 @@ where
         {
             self.broadcast_append_entries();
         }
+        println!("{}", self);
     }
 
     /// Send AppendEntries RPC to all peers.
@@ -343,6 +346,7 @@ where
             &dest,
             &source,
         );
+        println!("{}", self);
         self.send(&source, resp);
     }
 

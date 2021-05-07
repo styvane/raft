@@ -32,11 +32,11 @@ impl Event {
     /// Read incoming query, run the query and send the result.
     pub async fn response_broker(
         mut events: Receiver<Event>,
-        runtime: Runtime<Command>,
+        //runtime: Runtime<Command>,
     ) -> anyhow::Result<()> {
         let mut connections = HashMap::new();
-        let mut storage = Storage::with_runtime(runtime);
-
+        //        let mut storage = Storage::with_runtime(runtime);
+        let mut storage = Storage::new();
         while let Some(event) = events.next().await {
             match event {
                 Event::Connection { address, response } => {

@@ -24,3 +24,7 @@ features = ["derive"]
 [dependencies.async-std]
 version = "1.9"
 features = ["attributes"]
+
+
+[dependencies.futures]
+version = "0.3"
