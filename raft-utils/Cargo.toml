@@ -7,7 +7,4 @@ edition = "2018"
 
 [dependencies]
 anyhow = "1.0"
-
-[dependencies.async-std]
-version = "1.9"
-features = ["attributes"]
+tokio = { version = "1", features = ["rt", "net", "macros", "io-util"] }
