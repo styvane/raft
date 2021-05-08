@@ -6,3 +6,4 @@ pub use server::ServerOptions;
 mod command;
 mod event;
 mod storage;
+pub use storage::Storage;

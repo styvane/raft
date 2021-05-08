@@ -3,7 +3,6 @@ use crate::command::{Command, Value};
 use crate::storage::Storage;
 use async_std::channel::{Receiver, Sender};
 use async_std::stream::StreamExt;
-use raft_core::runtime::Runtime;
 use std::collections::HashMap;
 
 /// The `Event` type represents the server events.
@@ -32,11 +31,9 @@ impl Event {
     /// Read incoming query, run the query and send the result.
     pub async fn response_broker(
         mut events: Receiver<Event>,
-        //runtime: Runtime<Command>,
+        mut storage: Storage,
     ) -> anyhow::Result<()> {
         let mut connections = HashMap::new();
-        //        let mut storage = Storage::with_runtime(runtime);
-        let mut storage = Storage::new();
         while let Some(event) = events.next().await {
             match event {
                 Event::Connection { address, response } => {
@@ -45,8 +42,8 @@ impl Event {
                 Event::Request { sender, cmd } => {
                     if let Some(ch) = connections.get(&sender) {
                         let value: Value = storage.query(cmd).await.unwrap();
-                        if let Err(_) = ch.send(value).await {
-                            eprintln!("error send query result: {}", &sender);
+                        if let Err(err) = ch.send(value).await {
+                            eprintln!("{:?} while sending query result: {}", err, &sender);
                         }
                     }
                 }
