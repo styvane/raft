@@ -61,10 +61,7 @@ impl<V: Clone + fmt::Debug> Log<V> {
 
     /// Return the term of the previous log entry.
     pub fn previous_term(&self) -> Term {
-        match self.entries.iter().last() {
-            Some(entry) => Some(entry.term),
-            None => None,
-        }
+        self.entries.iter().last().map(|entry| entry.term)
     }
 
     pub fn append_entries(

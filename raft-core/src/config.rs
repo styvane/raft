@@ -2,7 +2,7 @@
 
 use config::{Config as Configure, File, FileFormat};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::Path;
 use std::slice::Iter;
 
 /// Cluster member configuration.
@@ -29,7 +29,7 @@ impl Cluster {
     }
 
     /// Create a cluster configuration from a path.
-    pub fn from_path(path: &PathBuf) -> anyhow::Result<Self> {
+    pub fn from_path(path: &Path) -> anyhow::Result<Self> {
         let mut cfg = Configure::new();
         cfg.merge(File::with_name(path.to_str().unwrap()))?;
         let cfg = cfg.try_into::<Self>()?;

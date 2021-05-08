@@ -3,9 +3,8 @@
 //! This module contains the Raft server implementation.
 
 use crate::config::Cluster;
-use crate::event::{
-    AppendEntries, AppendEntriesResponse, Event, Message, RequestVote, RequestVoteResponse, Vote,
-};
+use crate::event::{AppendEntries, AppendEntriesResponse};
+use crate::event::{Event, Message, RequestVote, RequestVoteResponse, Vote};
 use crate::log::{Entry, Log};
 use crate::types::{Index, Term};
 use async_std::channel::Sender;
@@ -141,6 +140,30 @@ where
         }
     }
 
+    /// Return server's id.
+    pub fn get_id(&self) -> usize {
+        self.id
+    }
+
+    /// Return servers's hostname.
+    pub fn hostname(&self) -> String {
+        self.config.get(&self.id).hostname().to_string()
+    }
+
+    /// This method checks whether self is truly the leader.
+    ///
+    /// In presence of network partition, we might have two leaders in the system.
+    /// To assert that self is the effective leader, self needs a quorum in of heartbeat.
+    pub fn is_leader(&mut self) -> bool {
+        if self.followers_heartbeat.len() > self.config.size() / 2 {
+            true
+        } else {
+            self.followers_heartbeat.clear();
+            self.become_follower();
+            false
+        }
+    }
+
     /// Reset some internal state after winning an election.
     pub fn become_leader(&mut self) {
         if self.role == Role::Leader {
@@ -225,6 +248,9 @@ where
 
     /// Handle client requests.
     pub fn client_append_entry(&mut self, data: V) {
+        if self.role != Role::Leader {
+            return;
+        }
         let mut entry = Vec::with_capacity(1);
         let current_term = if let Some(ref term) = self.current_term {
             *term
@@ -771,11 +797,18 @@ mod tests {
 
         process_events(&mut servers, &mut receivers);
 
+        {
+            let srv0 = &mut servers[0];
+            srv0.client_append_entry('n');
+        }
+
+        process_events(&mut servers, &mut receivers);
+
         assert_eq!(servers[0].last_applied, Some(11));
 
         {
             let srv0 = &mut servers[0];
-            srv0.client_append_entry('m');
+            srv0.client_append_entry('o');
         }
 
         process_events(&mut servers, &mut receivers);
