@@ -2,33 +2,34 @@
 
 use anyhow::{self, Context as _};
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
+use async_std::io::{self, BufWriter};
+use async_std::prelude::*;
 
 /// HEADER_SIZE is the size of the message.
 const HEADER_SIZE: usize = 10000;
 
 /// Send a header-prefixed frame over the network.
-pub async fn send_frame<T>(mut transport: T, buf: &[u8]) -> anyhow::Result<usize>
+pub async fn send_frame<T>(writer: &mut T, buf: &[u8]) -> anyhow::Result<usize>
 where
-    T: AsyncWrite + Unpin,
+    T: io::Write + Unpin,
 {
     let header = format!("{:>size$}", buf.len(), size = HEADER_SIZE);
     let header = header.as_bytes();
-    let mut writer = BufWriter::with_capacity(HEADER_SIZE + buf.len(), &mut transport);
-    writer.write(header).await?;
-    let size = writer.write(buf).await?;
-    writer.flush().await.context("Failed to flush buffer")?;
+    let mut buf_writer = BufWriter::with_capacity(HEADER_SIZE + buf.len(), writer);
+    buf_writer.write(header).await?;
+    let size = buf_writer.write(buf).await?;
+    buf_writer.flush().await.context("Failed to flush buffer")?;
 
     Ok(size)
 }
 
 /// Receive a header-prefixed message.
-pub async fn recv_frame<T>(mut transport: T) -> anyhow::Result<String>
+pub async fn recv_frame<T>(reader: &mut T) -> anyhow::Result<String>
 where
-    T: AsyncRead + Unpin,
+    T: io::Read + Unpin,
 {
     let mut size = [0; HEADER_SIZE];
-    transport
+    reader
         .read_exact(&mut size)
         .await
         .context("Unable to read message header")?;
@@ -37,7 +38,7 @@ where
     let size: usize = size.trim().parse().unwrap();
     let mut buf = vec![0; size];
 
-    transport
+    reader
         .read_exact(&mut buf)
         .await
         .context("Reading received message failed")?;
@@ -47,30 +48,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_std::task::{Context, Poll};
     use std::cell::RefCell;
-    use std::cmp;
     use std::pin::Pin;
-    use std::task::{Context, Poll};
-    use tokio::io::{self, ReadBuf};
 
     struct MockMessenger {
         buf: RefCell<Option<String>>,
     }
 
-    impl AsyncRead for MockMessenger {
+    impl io::Read for MockMessenger {
         fn poll_read(
             self: Pin<&mut Self>,
             _: &mut Context<'_>,
-            buf: &mut ReadBuf,
-        ) -> Poll<io::Result<()>> {
+            buf: &mut [u8],
+        ) -> Poll<io::Result<usize>> {
             match &mut *self.as_ref().buf.borrow_mut() {
                 Some(data) => {
                     let bytes = data.as_bytes();
-                    let amt = cmp::min(bytes.len(), buf.remaining());
-                    buf.put_slice(&bytes[..amt]);
-                    data.drain(..amt);
+                    buf.copy_from_slice(&bytes[..buf.len()]);
+                    data.drain(..buf.len());
 
-                    Poll::Ready(Ok(()))
+                    Poll::Ready(Ok(buf.len()))
                 }
                 None => Poll::Ready(Err(io::Error::new(io::ErrorKind::UnexpectedEof, "no data"))),
             }
@@ -85,7 +83,7 @@ mod tests {
         }
     }
 
-    impl AsyncWrite for MockMessenger {
+    impl io::Write for MockMessenger {
         fn poll_write(
             self: Pin<&mut Self>,
             _: &mut Context<'_>,
@@ -123,25 +121,25 @@ mod tests {
             Poll::Ready(Ok(()))
         }
 
-        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+        fn poll_close(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
             Poll::Ready(Ok(()))
         }
     }
 
-    #[tokio::test]
+    #[async_std::test]
     async fn test_send_message() {
-        let m = MockMessenger::new();
-        assert!(send_frame(m, b"hello").await.is_ok());
+        let mut m = MockMessenger::new();
+        assert!(send_frame(&mut m, b"hello").await.is_ok());
     }
 
-    #[tokio::test]
+    #[async_std::test]
     async fn test_recv_one_message() {
         let mut m = MockMessenger::new();
         assert!(send_frame(&mut m, b"hello").await.is_ok());
         assert_eq!(recv_frame(&mut m).await.unwrap(), "hello");
     }
 
-    #[tokio::test]
+    #[async_std::test]
     async fn test_recv_multi_messages() {
         let mut m = MockMessenger::new();
         assert!(send_frame(&mut m, b"hello").await.is_ok());
