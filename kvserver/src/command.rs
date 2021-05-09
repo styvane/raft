@@ -1,5 +1,6 @@
 /// The `Command` type represents the available database command.
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot::Sender;
 
 use std::str::FromStr;
 use std::string::ParseError;
@@ -26,10 +27,44 @@ impl FromStr for Value {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+type Consensus = Option<Sender<bool>>;
+
+#[derive(Debug, Deserialize, Serialize)]
 pub enum Command {
-    Get { key: Key },
-    Set { key: Key, value: Value },
-    Delete { key: Key },
+    Get {
+        key: Key,
+
+        #[serde(skip)]
+        consensus: Consensus,
+    },
+    Set {
+        key: Key,
+        value: Value,
+
+        #[serde(skip)]
+        consensus: Consensus,
+    },
+    Delete {
+        key: Key,
+        #[serde(skip)]
+        consensus: Consensus,
+    },
     Invalid(String),
+}
+
+impl Command {
+    pub fn set_consensus(&mut self, sender: Sender<bool>) {
+        match self {
+            Command::Get {
+                ref mut consensus, ..
+            } => consensus.replace(sender),
+            Command::Set {
+                ref mut consensus, ..
+            } => consensus.replace(sender),
+            Command::Delete {
+                ref mut consensus, ..
+            } => consensus.replace(sender),
+            Command::Invalid(..) => return,
+        };
+    }
 }

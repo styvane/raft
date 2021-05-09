@@ -2,6 +2,7 @@
 //! This module contains a key/value storage implementations.
 use crate::command::{Command, Key, Value};
 use std::collections::BTreeMap;
+
 /// The type `Storage` type is a key/value storage.
 #[derive(Debug)]
 pub struct Storage {
@@ -45,13 +46,13 @@ impl Storage {
     /// Query the storage.
     pub async fn query(&mut self, cmd: Command) -> Option<Value> {
         match cmd {
-            Command::Get { key } => self.get(&key).await,
-            Command::Delete { key } => {
+            Command::Get { key, .. } => self.get(&key).await,
+            Command::Delete { key, .. } => {
                 let value = self.delete(&key).await;
                 let value: Value = value.parse().unwrap();
                 Some(value)
             }
-            Command::Set { key, value } => {
+            Command::Set { key, value, .. } => {
                 let value = self.set(key, value).await;
                 let value: Value = value.parse().unwrap();
                 Some(value)
@@ -63,13 +64,13 @@ impl Storage {
     /// Request query the storage.
     pub async fn request_query(&mut self, cmd: Command) -> Option<Value> {
         match cmd {
-            Command::Get { key } => self.get(&key).await,
-            Command::Delete { key } => {
+            Command::Get { key, .. } => self.get(&key).await,
+            Command::Delete { key, .. } => {
                 let value = self.delete(&key).await;
                 let value: Value = value.parse().unwrap();
                 Some(value)
             }
-            Command::Set { key, value } => {
+            Command::Set { key, value, .. } => {
                 let value = self.set(key, value).await;
                 let value: Value = value.parse().unwrap();
                 Some(value)
@@ -90,6 +91,7 @@ mod tests {
         let cmd = Command::Set {
             key: Key::from_str("foo").unwrap(),
             value: Value::from_str("foo_val").unwrap(),
+            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("OK").unwrap()))
@@ -100,6 +102,7 @@ mod tests {
         let mut s = Storage::new();
         let cmd = Command::Delete {
             key: Key::from_str("foo").unwrap(),
+            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("OK").unwrap()))
@@ -110,6 +113,7 @@ mod tests {
         let mut s = Storage::new();
         let cmd = Command::Get {
             key: Key::from_str("foo").unwrap(),
+            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("NOK").unwrap()))
@@ -121,12 +125,14 @@ mod tests {
         let cmd = Command::Set {
             key: Key::from_str("foo").unwrap(),
             value: Value::from_str("foo_val").unwrap(),
+            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("OK").unwrap()));
 
         let cmd = Command::Get {
             key: Key::from_str("foo").unwrap(),
+            consensus: None,
         };
 
         assert_eq!(
@@ -136,11 +142,13 @@ mod tests {
 
         let cmd = Command::Delete {
             key: Key::from_str("foo").unwrap(),
+            consensus: None,
         };
         assert_eq!(s.query(cmd).await, Some(Value::from_str("OK").unwrap()));
 
         let cmd = Command::Get {
             key: Key::from_str("foo").unwrap(),
+            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("NOK").unwrap()))

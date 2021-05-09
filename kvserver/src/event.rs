@@ -1,11 +1,14 @@
 //! Server events
 use crate::command::{Command, Value};
 use crate::storage::Storage;
-use async_std::channel::{Receiver, Sender};
-use async_std::stream::StreamExt;
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
+use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::oneshot;
+
+type Consensus = Option<oneshot::Receiver<bool>>;
 
 /// The `Event` type represents the server events.
+#[derive(Debug)]
 pub enum Event {
     Connection {
         address: String,
@@ -14,6 +17,7 @@ pub enum Event {
     Request {
         sender: String,
         cmd: Command,
+        consensus: Consensus,
     },
 }
 
@@ -24,8 +28,12 @@ impl Event {
     }
 
     /// Create request event.
-    pub fn new_request(cmd: Command, sender: String) -> Self {
-        Self::Request { cmd, sender }
+    pub fn new_request(cmd: Command, sender: String, consensus: Consensus) -> Self {
+        Self::Request {
+            cmd,
+            sender,
+            consensus,
+        }
     }
 
     /// Read incoming query, run the query and send the result.
@@ -34,14 +42,26 @@ impl Event {
         mut storage: Storage,
     ) -> anyhow::Result<()> {
         let mut connections = HashMap::new();
-        while let Some(event) = events.next().await {
+        while let Some(event) = events.recv().await {
             match event {
                 Event::Connection { address, response } => {
                     connections.insert(address, response);
                 }
-                Event::Request { sender, cmd } => {
+                Event::Request {
+                    sender,
+                    cmd,
+                    consensus,
+                } => {
                     if let Some(ch) = connections.get(&sender) {
-                        let value: Value = storage.query(cmd).await.unwrap();
+                        let mut value = Value::from_str("unable to process request").unwrap();
+                        if let Some(consensus) = consensus {
+                            match consensus.await {
+                                Ok(b) if b => {
+                                    value = storage.query(cmd).await.unwrap();
+                                }
+                                _ => (),
+                            }
+                        }
                         if let Err(err) = ch.send(value).await {
                             eprintln!("{:?} while sending query result: {}", err, &sender);
                         }
