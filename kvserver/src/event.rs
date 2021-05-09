@@ -1,9 +1,10 @@
 //! Server events
 use crate::command::{Command, Value};
 use crate::storage::Storage;
+use async_std::channel::{Receiver, Sender};
+use async_std::stream::StreamExt;
+use futures::channel::oneshot;
 use std::{collections::HashMap, str::FromStr};
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::oneshot;
 
 type Consensus = Option<oneshot::Receiver<bool>>;
 
@@ -42,7 +43,7 @@ impl Event {
         mut storage: Storage,
     ) -> anyhow::Result<()> {
         let mut connections = HashMap::new();
-        while let Some(event) = events.recv().await {
+        while let Some(event) = events.next().await {
             match event {
                 Event::Connection { address, response } => {
                     connections.insert(address, response);

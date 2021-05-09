@@ -1,6 +1,7 @@
+use futures::channel::oneshot;
+
 /// The `Command` type represents the available database command.
 use serde::{Deserialize, Serialize};
-use tokio::sync::oneshot::Sender;
 
 use std::str::FromStr;
 use std::string::ParseError;
@@ -27,7 +28,7 @@ impl FromStr for Value {
     }
 }
 
-type Consensus = Option<Sender<bool>>;
+type Consensus = Option<oneshot::Sender<bool>>;
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum Command {
@@ -53,18 +54,24 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn set_consensus(&mut self, sender: Sender<bool>) {
+    pub fn set_consensus(&mut self, sender: oneshot::Sender<bool>) {
         match self {
             Command::Get {
                 ref mut consensus, ..
-            } => consensus.replace(sender),
+            } => {
+                consensus.replace(sender);
+            }
             Command::Set {
                 ref mut consensus, ..
-            } => consensus.replace(sender),
+            } => {
+                consensus.replace(sender);
+            }
             Command::Delete {
                 ref mut consensus, ..
-            } => consensus.replace(sender),
-            Command::Invalid(..) => return,
+            } => {
+                consensus.replace(sender);
+            }
+            Command::Invalid(..) => {}
         };
     }
 }

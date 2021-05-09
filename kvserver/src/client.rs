@@ -1,9 +1,9 @@
 //! Storage client implementation.
 
+use async_std::net::TcpStream;
 use raft_utils::{recv_frame, send_frame};
 use rustyline::Editor;
 use structopt::StructOpt;
-use tokio::net::TcpStream;
 
 /// The type client is the key/value storage client.
 #[derive(Debug, StructOpt)]
@@ -26,13 +26,14 @@ impl Client {
     /// Connect the client to the server.
     pub async fn connect(&mut self) {
         let addr = self.server_addr();
-        let mut stream = TcpStream::connect(addr).await.unwrap();
-        let (mut read, mut write) = stream.split();
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let (reader, writer) = &mut (&stream, &stream);
+
         loop {
             let mut editor = Editor::<()>::new();
             let command: String = editor.readline("> ").unwrap();
-            send_frame(&mut write, command.as_bytes()).await.unwrap();
-            let message = recv_frame(&mut read).await.unwrap();
+            send_frame(writer, command.as_bytes()).await.unwrap();
+            let message = recv_frame(reader).await.unwrap();
             println!("{:?}", message);
         }
     }
