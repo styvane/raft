@@ -1,4 +1,4 @@
-//! Transport implement the message passing system.
+//! Header prefix frame processing.
 
 use anyhow::{self, Context as _};
 
@@ -7,50 +7,41 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 /// HEADER_SIZE is the size of the message.
 const HEADER_SIZE: usize = 10000;
 
-/// The `Transport` owns the data for sending/receiving bytes.
-#[derive(Debug, Clone)]
-pub struct Transport<T> {
-    messenger: T,
+/// Send a header-prefixed frame over the network.
+pub async fn send_frame<T>(mut transport: T, buf: &[u8]) -> anyhow::Result<usize>
+where
+    T: AsyncWrite + Unpin,
+{
+    let header = format!("{:>size$}", buf.len(), size = HEADER_SIZE);
+    let header = header.as_bytes();
+    let mut writer = BufWriter::with_capacity(HEADER_SIZE + buf.len(), &mut transport);
+    writer.write(header).await?;
+    let size = writer.write(buf).await?;
+    writer.flush().await.context("Failed to flush buffer")?;
+
+    Ok(size)
 }
 
-impl<T> Transport<T>
+/// Receive a header-prefixed message.
+pub async fn recv_frame<T>(mut transport: T) -> anyhow::Result<String>
 where
-    T: AsyncRead + AsyncWrite + Unpin,
+    T: AsyncRead + Unpin,
 {
-    pub fn new(messenger: T) -> Self {
-        Transport { messenger }
-    }
+    let mut size = [0; HEADER_SIZE];
+    transport
+        .read_exact(&mut size)
+        .await
+        .context("Unable to read message header")?;
 
-    /// Send a header-prefixed frame over the network.
-    pub async fn send_frame(&mut self, buf: &[u8]) -> anyhow::Result<usize> {
-        let header = format!("{:>size$}", buf.len(), size = HEADER_SIZE);
-        let header = header.as_bytes();
-        let mut writer = BufWriter::with_capacity(HEADER_SIZE + buf.len(), &mut self.messenger);
-        writer.write(header).await?;
-        let size = writer.write(buf).await?;
-        writer.flush().await.context("Failed to flush buffer")?;
+    let size = String::from_utf8(size.to_vec()).unwrap();
+    let size: usize = size.trim().parse().unwrap();
+    let mut buf = vec![0; size];
 
-        Ok(size)
-    }
-
-    /// Receive a header-prefixed message.
-    pub async fn recv_frame(&mut self) -> anyhow::Result<String> {
-        let mut size = [0; HEADER_SIZE];
-        self.messenger
-            .read_exact(&mut size)
-            .await
-            .context("Unable to read message header")?;
-
-        let size = String::from_utf8(size.to_vec()).unwrap();
-        let size: usize = size.trim().parse().unwrap();
-        let mut buf = vec![0; size];
-
-        self.messenger
-            .read_exact(&mut buf)
-            .await
-            .context("Reading received message failed")?;
-        String::from_utf8(buf).context("Unable to convert message to string")
-    }
+    transport
+        .read_exact(&mut buf)
+        .await
+        .context("Reading received message failed")?;
+    String::from_utf8(buf).context("Unable to convert message to string")
 }
 
 #[cfg(test)]
@@ -140,29 +131,26 @@ mod tests {
     #[tokio::test]
     async fn test_send_message() {
         let m = MockMessenger::new();
-        let mut trp = Transport::new(m);
-        assert!(trp.send_frame(b"hello").await.is_ok());
+        assert!(send_frame(m, b"hello").await.is_ok());
     }
 
     #[tokio::test]
     async fn test_recv_one_message() {
-        let m = MockMessenger::new();
-        let mut trp = Transport::new(m);
-        assert!(trp.send_frame(b"hello").await.is_ok());
-        assert_eq!(trp.recv_frame().await.unwrap(), "hello");
+        let mut m = MockMessenger::new();
+        assert!(send_frame(&mut m, b"hello").await.is_ok());
+        assert_eq!(recv_frame(&mut m).await.unwrap(), "hello");
     }
 
     #[tokio::test]
     async fn test_recv_multi_messages() {
-        let m = MockMessenger::new();
-        let mut trp = Transport::new(m);
-        assert!(trp.send_frame(b"hello").await.is_ok());
-        assert!(trp.send_frame(b"world").await.is_ok());
+        let mut m = MockMessenger::new();
+        assert!(send_frame(&mut m, b"hello").await.is_ok());
+        assert!(send_frame(&mut m, b"world").await.is_ok());
 
-        let mut data = trp.recv_frame().await.unwrap();
+        let mut data = recv_frame(&mut m).await.unwrap();
         assert_eq!(data, "hello");
 
-        data = trp.recv_frame().await.unwrap();
+        data = recv_frame(&mut m).await.unwrap();
         assert_eq!(data, "world");
     }
 }
