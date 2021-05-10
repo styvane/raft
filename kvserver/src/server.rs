@@ -1,14 +1,13 @@
 //! This module contains the server.
 
-use crate::command::{Command, Value};
+use crate::command::{Command, CommandMessage};
 use crate::event::Event;
 use crate::storage::Storage;
-use async_std::channel::{self, Receiver, Sender};
+use async_std::channel;
 use async_std::net::{TcpListener, TcpStream};
-use async_std::stream::StreamExt;
 use async_std::task;
 use futures::channel::oneshot;
-use raft_utils::{recv_frame, send_frame};
+use raft_utils::recv_frame;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -34,24 +33,29 @@ pub struct ServerOptions {
     pub config: PathBuf,
 }
 
+type Request = channel::Sender<CommandMessage>;
+
 /// The `Server` type represents the storage server
 pub struct Server {
     options: ServerOptions,
     storage: Option<Storage>,
+    request: Request,
 }
 
 impl Server {
     /// Create a new server.
-    pub fn new(options: ServerOptions, storage: Storage) -> Self {
+    pub fn new(options: ServerOptions, storage: Storage, request: Request) -> Self {
         Server {
             options,
             storage: Some(storage),
+            request,
         }
     }
 
     /// Read a stream and send the event throught a channel.
 
-    pub async fn read_stream(sender: Sender<Event>, addr: String, reader: Arc<TcpStream>) {
+    pub async fn read_stream(sender: channel::Sender<Event>, reader: Arc<TcpStream>) {
+        let addr = (&*reader).peer_addr().unwrap().to_string();
         loop {
             let mut stream = &*reader;
             match recv_frame(&mut stream).await {
@@ -64,13 +68,20 @@ impl Server {
                     }
                     let req = match serde_json::from_str(&msg) {
                         Ok(cmd) => {
-                            let mut cmd: Command = cmd;
+                            let cmd: Command = cmd;
                             let (tx, rx) = oneshot::channel();
-                            cmd.set_consensus(tx);
+                            let cmd = CommandMessage {
+                                kind: cmd,
+                                response: Some(tx),
+                            };
                             Event::new_request(cmd, addr.clone(), Some(rx))
                         }
                         Err(e) => {
                             let cmd = Command::Invalid(format!("{:?}", e));
+                            let cmd = CommandMessage {
+                                kind: cmd,
+                                response: None,
+                            };
                             Event::new_request(cmd, addr.clone(), None)
                         }
                     };
@@ -87,37 +98,24 @@ impl Server {
     pub async fn listen_and_serve(&mut self) -> anyhow::Result<()> {
         let listener =
             TcpListener::bind(format!("{}:{}", self.options.bind_ip, self.options.port)).await?;
-
         let (broker_tx, broker_rx) = channel::bounded(CONNEXION_MAX);
         let storage = self.storage.take().unwrap();
-        let _broker_handle = task::spawn(Event::response_broker(broker_rx, storage));
 
-        while let Ok((stream, addr)) = listener.accept().await {
-            let addr = addr.to_string();
-            let (query_tx, query_rx) = channel::bounded(CONNEXION_MAX);
+        let _broker_handle = task::spawn(Event::response_broker(
+            broker_rx,
+            self.request.clone(),
+            storage,
+        ));
 
-            let event = Event::new_connection(addr.clone(), query_tx);
-
+        while let Ok((stream, _)) = listener.accept().await {
+            let stream = Arc::new(stream);
+            let event = Event::new_connection(stream.clone());
             if let Err(e) = broker_tx.send(event).await {
                 eprintln!("{:?}", e);
             }
-            let stream = Arc::new(stream);
 
-            let _handle = task::spawn(Self::read_stream(broker_tx.clone(), addr, stream.clone()));
-            let _handle = task::spawn(Self::write_stream(query_rx, stream.clone()));
+            let _handle = task::spawn(Self::read_stream(broker_tx.clone(), stream.clone()));
         }
-
         Ok(())
-    }
-
-    pub async fn write_stream(mut receiver: Receiver<Value>, writer: Arc<TcpStream>) {
-        let mut stream = &*writer;
-        while let Some(v) = receiver.next().await {
-            if let Ok(data) = serde_json::to_string(&v) {
-                if let Err(e) = send_frame(&mut stream, data.as_bytes()).await {
-                    eprintln!("{:?}", e);
-                }
-            }
-        }
     }
 }

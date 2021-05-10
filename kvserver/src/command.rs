@@ -28,50 +28,24 @@ impl FromStr for Value {
     }
 }
 
-type Consensus = Option<oneshot::Sender<bool>>;
+type ConsensusResponse = Option<oneshot::Sender<bool>>;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum Command {
-    Get {
-        key: Key,
-
-        #[serde(skip)]
-        consensus: Consensus,
-    },
-    Set {
-        key: Key,
-        value: Value,
-
-        #[serde(skip)]
-        consensus: Consensus,
-    },
-    Delete {
-        key: Key,
-        #[serde(skip)]
-        consensus: Consensus,
-    },
+    Get { key: Key },
+    Set { key: Key, value: Value },
+    Delete { key: Key },
     Invalid(String),
 }
 
-impl Command {
+#[derive(Debug)]
+pub struct CommandMessage {
+    pub kind: Command,
+    pub response: ConsensusResponse,
+}
+
+impl CommandMessage {
     pub fn set_consensus(&mut self, sender: oneshot::Sender<bool>) {
-        match self {
-            Command::Get {
-                ref mut consensus, ..
-            } => {
-                consensus.replace(sender);
-            }
-            Command::Set {
-                ref mut consensus, ..
-            } => {
-                consensus.replace(sender);
-            }
-            Command::Delete {
-                ref mut consensus, ..
-            } => {
-                consensus.replace(sender);
-            }
-            Command::Invalid(..) => {}
-        };
+        self.response = Some(sender);
     }
 }

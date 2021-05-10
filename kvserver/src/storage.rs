@@ -92,7 +92,6 @@ mod tests {
         let cmd = Command::Set {
             key: Key::from_str("foo").unwrap(),
             value: Value::from_str("foo_val").unwrap(),
-            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("OK").unwrap()))
@@ -103,7 +102,6 @@ mod tests {
         let mut s = Storage::new();
         let cmd = Command::Delete {
             key: Key::from_str("foo").unwrap(),
-            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("OK").unwrap()))
@@ -114,7 +112,6 @@ mod tests {
         let mut s = Storage::new();
         let cmd = Command::Get {
             key: Key::from_str("foo").unwrap(),
-            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("NOK").unwrap()))
@@ -126,14 +123,12 @@ mod tests {
         let cmd = Command::Set {
             key: Key::from_str("foo").unwrap(),
             value: Value::from_str("foo_val").unwrap(),
-            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("OK").unwrap()));
 
         let cmd = Command::Get {
             key: Key::from_str("foo").unwrap(),
-            consensus: None,
         };
 
         assert_eq!(
@@ -143,13 +138,11 @@ mod tests {
 
         let cmd = Command::Delete {
             key: Key::from_str("foo").unwrap(),
-            consensus: None,
         };
         assert_eq!(s.query(cmd).await, Some(Value::from_str("OK").unwrap()));
 
         let cmd = Command::Get {
             key: Key::from_str("foo").unwrap(),
-            consensus: None,
         };
 
         assert_eq!(s.query(cmd).await, Some(Value::from_str("NOK").unwrap()))
