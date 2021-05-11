@@ -1,7 +1,7 @@
 //! This module contains the server.
 
 use crate::command::{Command, CommandMessage};
-use crate::event::Event;
+use crate::event::{Event, Request};
 use crate::storage::Storage;
 use async_std::channel;
 use async_std::net::{TcpListener, TcpStream};
@@ -32,8 +32,6 @@ pub struct ServerOptions {
     #[structopt(short, long, parse(from_os_str))]
     pub config: PathBuf,
 }
-
-type Request = channel::Sender<CommandMessage>;
 
 /// The `Server` type represents the storage server
 pub struct Server {

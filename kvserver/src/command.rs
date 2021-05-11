@@ -1,4 +1,5 @@
 use futures::channel::oneshot;
+use raft_core::runtime::{ClientRequest, ConsensusSender};
 
 /// The `Command` type represents the available database command.
 use serde::{Deserialize, Serialize};
@@ -28,8 +29,6 @@ impl FromStr for Value {
     }
 }
 
-type ConsensusResponse = Option<oneshot::Sender<bool>>;
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum Command {
     Get { key: Key },
@@ -41,11 +40,23 @@ pub enum Command {
 #[derive(Debug)]
 pub struct CommandMessage {
     pub kind: Command,
-    pub response: ConsensusResponse,
+    pub response: ConsensusSender,
 }
 
 impl CommandMessage {
     pub fn set_consensus(&mut self, sender: oneshot::Sender<bool>) {
         self.response = Some(sender);
+    }
+}
+
+impl ClientRequest for CommandMessage {
+    type Entry = Command;
+
+    fn entry_kind(&self) -> Self::Entry {
+        self.kind.clone()
+    }
+
+    fn responder(self) -> ConsensusSender {
+        self.response
     }
 }

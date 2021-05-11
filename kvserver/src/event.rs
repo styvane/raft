@@ -5,14 +5,12 @@ use async_std::channel;
 use async_std::net::TcpStream;
 use async_std::stream::StreamExt;
 use async_std::task;
-use futures::channel::oneshot;
+use raft_core::runtime::{ClientRequest, ConsensusReceiver};
 use raft_utils::send_frame;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::{collections::HashMap, str::FromStr};
-
-type Consensus = Option<oneshot::Receiver<bool>>;
-pub type ConsensusRequest = channel::Sender<CommandMessage>;
+//pub type ClientRequest = channel::Sender<CommandMessage>;
 
 /// The `Event` type represents the server events.
 #[derive(Debug)]
@@ -23,9 +21,11 @@ pub enum Event {
     Request {
         sender: String,
         cmd: CommandMessage,
-        consensus: Consensus,
+        consensus: ConsensusReceiver,
     },
 }
+
+pub(crate) type Request = channel::Sender<Box<dyn ClientRequest<Entry = Command>>>;
 
 impl Event {
     /// Create new request event.
@@ -34,7 +34,7 @@ impl Event {
     }
 
     /// Create request event.
-    pub fn new_request(cmd: CommandMessage, sender: String, consensus: Consensus) -> Self {
+    pub fn new_request(cmd: CommandMessage, sender: String, consensus: ConsensusReceiver) -> Self {
         Self::Request {
             cmd,
             sender,
@@ -45,7 +45,7 @@ impl Event {
     /// Read incoming query, run the query and send the result.
     pub async fn response_broker(
         mut events: channel::Receiver<Event>,
-        consensus_request: ConsensusRequest,
+        requests: Request,
         mut storage: Storage,
     ) -> anyhow::Result<()> {
         let mut connections = HashMap::new();
@@ -76,7 +76,7 @@ impl Event {
                         let mut value: Value = "unproccessable entity".parse().unwrap();
                         if let Some(consensus) = consensus {
                             let query = cmd.kind.clone();
-                            if let Err(error) = consensus_request.send(cmd).await {
+                            if let Err(error) = requests.send(Box::new(cmd)).await {
                                 eprintln!("{:?} while sending client entry to raft broker", error);
 
                                 match consensus.await {

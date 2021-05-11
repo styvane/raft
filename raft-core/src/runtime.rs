@@ -7,6 +7,7 @@ use async_std::channel;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
+use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use raft_utils::{recv_frame, send_frame};
 use rand::rngs::StdRng;
@@ -39,6 +40,18 @@ pub struct Runtime<V> {
     outgoing: Option<channel::Receiver<Message<V>>>,
 }
 
+pub type ConsensusSender = Option<oneshot::Sender<bool>>;
+pub type ConsensusReceiver = Option<oneshot::Receiver<bool>>;
+type Request<V> = channel::Receiver<Box<dyn ClientRequest<Entry = V>>>;
+
+pub trait ClientRequest: Send {
+    type Entry;
+
+    fn entry_kind(&self) -> Self::Entry;
+
+    fn responder(self) -> ConsensusSender;
+}
+
 impl<V> Runtime<V>
 where
     V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
@@ -53,7 +66,11 @@ where
     }
 
     /// Start the runtime server
-    pub async fn start(outgoing: channel::Receiver<Message<V>>, raft_server: Server<V>) {
+    pub async fn start(
+        outgoing: channel::Receiver<Message<V>>,
+        requests: Request<V>,
+        raft_server: Server<V>,
+    ) {
         let netaddr = raft_server.hostname();
         let (broker_tx, broker_rx) = channel::bounded(MAX_MESSAGES);
 
@@ -61,7 +78,12 @@ where
         let _handle = task::spawn(Self::accept(netaddr, broker_tx.clone()));
 
         // Spawn message broker tasks.
-        let _handle = task::spawn(Self::message_broker(broker_rx, outgoing, raft_server));
+        let _handle = task::spawn(Self::message_broker(
+            broker_rx,
+            outgoing,
+            requests,
+            raft_server,
+        ));
 
         // Spawn task that emits event for Raft leader elections.
         let _handle = task::spawn(Self::election_timeout(broker_tx.clone()));
@@ -100,11 +122,13 @@ where
     async fn message_broker(
         incoming: channel::Receiver<Event<V>>,
         outgoing: channel::Receiver<Message<V>>,
+        client_requests: Request<V>,
         mut server: Server<V>,
     ) {
         let mut connections = HashMap::new();
         let mut incoming = incoming.fuse();
         let mut outgoing = outgoing.fuse();
+        let mut client_requests = client_requests.fuse();
         loop {
             select! {
                 msg = incoming.next().fuse() => if let Some(event) = msg {
@@ -123,13 +147,16 @@ where
                         }
                     }
                 },
-                event = outgoing.next().fuse()  => {
-                    let event = event.unwrap();
+                msg = outgoing.next().fuse() => if let Some(event) = msg {
                     if let Some(tx) = connections.get(&event.dest) {
                         if let Err(error) = tx.send(event).await {
                             eprintln!("{:?}", error);
                         }
                     }
+                },
+
+                req = client_requests.next().fuse() => if let Some(msg) = req {
+                    server.client_append_entry(msg.entry_kind());
                 }
             }
         }
