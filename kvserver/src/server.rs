@@ -1,12 +1,13 @@
 //! This module contains the server.
 
 use crate::command::{Command, CommandMessage};
-use crate::event::{Event, Request};
+use crate::event::Event;
 use crate::storage::Storage;
 use async_std::channel;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
 use futures::channel::oneshot;
+use raft_core::{runtime, server, Cluster};
 use raft_utils::recv_frame;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -37,16 +38,14 @@ pub struct ServerOptions {
 pub struct Server {
     options: ServerOptions,
     storage: Option<Storage>,
-    request: Request,
 }
 
 impl Server {
     /// Create a new server.
-    pub fn new(options: ServerOptions, storage: Storage, request: Request) -> Self {
+    pub fn new(options: ServerOptions, storage: Storage) -> Self {
         Server {
             options,
             storage: Some(storage),
-            request,
         }
     }
 
@@ -99,10 +98,14 @@ impl Server {
         let (broker_tx, broker_rx) = channel::bounded(CONNEXION_MAX);
         let storage = self.storage.take().unwrap();
 
-        let _broker_handle = task::spawn(Event::response_broker(
-            broker_rx,
-            self.request.clone(),
-            storage,
+        let (messages, outgoing) = channel::bounded(CONNEXION_MAX);
+        let (client_sender, requests) = channel::bounded(CONNEXION_MAX);
+        let _broker_handle = task::spawn(Event::response_broker(broker_rx, client_sender, storage));
+        let cfg = Cluster::from_path(self.options.config.as_path()).unwrap();
+        let _runtime_handle = task::spawn(runtime::setup::<Command>(
+            outgoing,
+            requests,
+            server::Server::new(self.options.node_id, cfg, messages),
         ));
 
         while let Ok((stream, _)) = listener.accept().await {

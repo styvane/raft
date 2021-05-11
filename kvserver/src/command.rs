@@ -50,9 +50,9 @@ impl CommandMessage {
 }
 
 impl ClientRequest for CommandMessage {
-    type Entry = Command;
+    type EntryKind = Command;
 
-    fn entry_kind(&self) -> Self::Entry {
+    fn entry_kind(&self) -> Self::EntryKind {
         self.kind.clone()
     }
 

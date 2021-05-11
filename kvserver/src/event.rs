@@ -25,7 +25,7 @@ pub enum Event {
     },
 }
 
-pub(crate) type Request = channel::Sender<Box<dyn ClientRequest<Entry = Command>>>;
+pub(crate) type Request = channel::Sender<Box<dyn ClientRequest<EntryKind = Command>>>;
 
 impl Event {
     /// Create new request event.
