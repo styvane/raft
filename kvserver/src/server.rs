@@ -49,49 +49,6 @@ impl Server {
         }
     }
 
-    /// Read a stream and send the event throught a channel.
-
-    pub async fn read_stream(sender: channel::Sender<Event>, reader: Arc<TcpStream>) {
-        let addr = (&*reader).peer_addr().unwrap().to_string();
-        loop {
-            let mut stream = &*reader;
-            match recv_frame(&mut stream).await {
-                Err(error) => {
-                    eprintln!("{:?}", error);
-                }
-                Ok(msg) => {
-                    if msg.trim().is_empty() {
-                        break;
-                    }
-
-                    let req = match serde_json::from_str(&msg) {
-                        Ok(cmd) => {
-                            let cmd: Command = cmd;
-                            let (tx, rx) = oneshot::channel();
-                            let cmd = CommandMessage {
-                                kind: cmd,
-                                response: Some(tx),
-                            };
-                            Event::new_request(cmd, addr.clone(), Some(rx))
-                        }
-                        Err(e) => {
-                            let cmd = Command::Invalid(format!("{:?}", e));
-                            let cmd = CommandMessage {
-                                kind: cmd,
-                                response: None,
-                            };
-                            Event::new_request(cmd, addr.clone(), None)
-                        }
-                    };
-
-                    if let Err(e) = sender.send(req).await {
-                        eprintln!("{:?}", e);
-                    }
-                }
-            }
-        }
-    }
-
     /// Listen to incoming connection and serve request.
     pub async fn listen_and_serve(&mut self) -> anyhow::Result<()> {
         let listener =
@@ -101,12 +58,20 @@ impl Server {
 
         let (messages, outgoing) = channel::bounded(CONNEXION_MAX);
         let (client_sender, requests) = channel::bounded(CONNEXION_MAX);
-        let _broker_handle = task::spawn(Event::response_broker(broker_rx, client_sender, storage));
+        let (commit_tx, commit_rx) = channel::bounded(CONNEXION_MAX);
+
+        let _broker_handle = task::spawn(Event::response_broker(
+            storage,
+            broker_rx,
+            client_sender,
+            commit_rx,
+        ));
         let cfg = Cluster::from_path(self.options.config.as_path()).unwrap();
+
         let _runtime_handle = task::spawn(runtime::setup::<Command>(
             outgoing,
             requests,
-            server::Server::new(self.options.node_id, cfg, messages),
+            server::Server::new(self.options.node_id, cfg, messages, Some(commit_tx)),
         ));
 
         while let Ok((stream, _)) = listener.accept().await {
@@ -116,9 +81,51 @@ impl Server {
                 eprintln!("{:?}", e);
             }
 
-            let _handle = task::spawn(Self::read_stream(broker_tx.clone(), stream.clone()));
+            let _handle = task::spawn(read_stream(broker_tx.clone(), stream.clone()));
         }
 
         Ok(())
+    }
+}
+
+/// Read a stream and send the event throught a channel.
+pub async fn read_stream(sender: channel::Sender<Event>, reader: Arc<TcpStream>) {
+    let addr = (&*reader).peer_addr().unwrap().to_string();
+    loop {
+        let mut stream = &*reader;
+        match recv_frame(&mut stream).await {
+            Err(error) => {
+                eprintln!("{:?}", error);
+            }
+            Ok(msg) => {
+                if msg.trim().is_empty() {
+                    break;
+                }
+
+                let req = match serde_json::from_str(&msg) {
+                    Ok(cmd) => {
+                        let cmd: Command = cmd;
+                        let (tx, rx) = oneshot::channel();
+                        let cmd = CommandMessage {
+                            kind: cmd,
+                            response: Some(tx),
+                        };
+                        Event::new_request(cmd, addr.clone(), Some(rx))
+                    }
+                    Err(e) => {
+                        let cmd = Command::Invalid(format!("{:?}", e));
+                        let cmd = CommandMessage {
+                            kind: cmd,
+                            response: None,
+                        };
+                        Event::new_request(cmd, addr.clone(), None)
+                    }
+                };
+
+                if let Err(e) = sender.send(req).await {
+                    eprintln!("{:?}", e);
+                }
+            }
+        }
     }
 }

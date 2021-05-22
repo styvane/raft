@@ -30,6 +30,10 @@ pub trait ClientRequest: Send {
     fn responder(&mut self) -> &mut ConsensusSender;
 }
 
+/// The `Commit` type is an optional channel of log that followers must apply
+/// to their state machines.
+pub type Commit<V> = Option<Sender<V>>;
+
 /// The type `Server` is the raft server.
 #[derive(Debug)]
 pub struct Server<V> {
@@ -78,6 +82,9 @@ pub struct Server<V> {
 
     // Waiting entries to be committed.
     waiting: HashMap<usize, oneshot::Sender<bool>>,
+
+    // Entries to apply to the state machine by followers.
+    commits: Commit<V>,
 }
 
 impl<V> fmt::Display for Server<V>
@@ -97,13 +104,12 @@ where
 
         write!(
             f,
-            "Server<id={}, term={:?}, role={},  commit_index={}, vote_for={}, messages={:?}, log={:?}>",
+            "Server<id={}, term={:?}, role={},  commit_index={}, vote_for={}, log={:?}>",
             self.config.get(&self.id).hostname(),
             self.current_term,
             self.role,
             commit_index,
             vote_for,
-            self.messages,
             self.log
         )
     }
@@ -114,7 +120,12 @@ where
     V: Clone + fmt::Debug,
 {
     /// Create new Raft server.
-    pub fn new(id: usize, config: Cluster, messages: Sender<Message<V>>) -> Self {
+    pub fn new(
+        id: usize,
+        config: Cluster,
+        messages: Sender<Message<V>>,
+        commits: Commit<V>,
+    ) -> Self {
         let size = config.size();
         Server {
             id,
@@ -132,11 +143,18 @@ where
             has_heard_from_leader: false,
             messages,
             waiting: HashMap::new(),
+            commits,
         }
     }
 
     /// Create new Raft server with a existing log.
-    pub fn with_log(id: usize, config: Cluster, messages: Sender<Message<V>>, log: Log<V>) -> Self {
+    pub fn with_log(
+        id: usize,
+        config: Cluster,
+        messages: Sender<Message<V>>,
+        log: Log<V>,
+        commits: Commit<V>,
+    ) -> Self {
         let next_index: HashMap<String, usize> = config
             .members_iter()
             .map(|x| (x.hostname().to_string(), 0))
@@ -159,6 +177,7 @@ where
             has_heard_from_leader: false,
             messages,
             waiting: HashMap::new(),
+            commits,
         }
     }
 
@@ -388,17 +407,21 @@ where
             if self.commit_index > self.last_applied {
                 // Apply log to the state machine
                 let mut index = self.commit_index.clone().unwrap();
-
                 loop {
                     if self.last_applied.is_none()
                         || index > self.last_applied.clone().unwrap_or_default()
                     {
-                        // Update index of last log applied.
-                        if let Some(ch) = self.waiting.remove(&index) {
-                            if let Err(error) = ch.send(true) {
-                                eprintln!("{:?}", error);
-                            }
-                        };
+                        if let Some(ref commits) = self.commits {
+                            task::block_on(async {
+                                if let Err(error) = commits
+                                    .clone()
+                                    .send(self.log.entries[index].clone().value)
+                                    .await
+                                {
+                                    eprintln!("{:?}", error);
+                                }
+                            })
+                        }
 
                         if index == 0 {
                             break;
@@ -408,6 +431,8 @@ where
                         break;
                     }
                 }
+
+                // Update index of last log applied.
                 self.last_applied = self.commit_index;
             }
         }
@@ -422,6 +447,29 @@ where
         );
         println!("{}", self);
         self.send(&source, resp);
+    }
+
+    /// Send client response.
+    fn reply_client(&mut self) {
+        // Apply log to the state machine
+        let mut index = self.commit_index.clone().unwrap();
+        loop {
+            if self.last_applied.is_none() || index > self.last_applied.clone().unwrap_or_default()
+            {
+                // Update index of last log applied.
+                if let Some(ch) = self.waiting.remove(&index) {
+                    if let Err(error) = ch.send(true) {
+                        eprintln!("{:?}", error);
+                    }
+                };
+                if index == 0 {
+                    break;
+                }
+                index -= 1;
+            } else {
+                break;
+            }
+        }
     }
 
     /// Handle AppendEntries RPC response from a server.
@@ -457,27 +505,8 @@ where
             }
 
             if self.commit_index > self.last_applied {
-                // Apply log to the state machine
-                let mut index = self.commit_index.clone().unwrap();
-
-                loop {
-                    if self.last_applied.is_none()
-                        || index > self.last_applied.clone().unwrap_or_default()
-                    {
-                        // Update index of last log applied.
-                        if let Some(ch) = self.waiting.remove(&index) {
-                            if let Err(error) = ch.send(true) {
-                                eprintln!("{:?}", error);
-                            }
-                        };
-                        if index == 0 {
-                            break;
-                        }
-                        index -= 1;
-                    } else {
-                        break;
-                    }
-                }
+                // Reply to all client waiting for consensus.
+                self.reply_client();
 
                 // Update last applied index.
                 self.last_applied = self.commit_index;
@@ -690,7 +719,7 @@ mod tests {
         for (i, log) in setup_logs_scenario_paper_fig7().into_iter().enumerate() {
             let term = log.previous_term();
             let (tx, rx) = bounded(100);
-            let mut srv = Server::with_log(i, config.clone(), tx, log);
+            let mut srv = Server::with_log(i, config.clone(), tx, log, None);
             srv.current_term = term;
             servers.push(srv);
             receivers.push(rx);
@@ -736,7 +765,7 @@ mod tests {
         let mut messages = Vec::with_capacity(size);
         for i in 0..size {
             let (tx, rx) = bounded(10);
-            let srv = Server::new(i, config.clone(), tx);
+            let srv = Server::new(i, config.clone(), tx, None);
             servers.push(srv);
             messages.push(rx);
         }
@@ -780,7 +809,7 @@ mod tests {
         )
         .unwrap();
         let (tx, _) = bounded(0);
-        let mut srv: Server<()> = Server::new(0, cfg, tx);
+        let mut srv: Server<()> = Server::new(0, cfg, tx, None);
         assert_eq!(srv.role, Role::Follower);
         srv.become_leader();
     }
@@ -799,7 +828,7 @@ mod tests {
         )
         .unwrap();
         let (tx, _) = bounded(1);
-        let mut srv: Server<()> = Server::new(0, cfg, tx);
+        let mut srv: Server<()> = Server::new(0, cfg, tx, None);
 
         assert_eq!(srv.role, Role::Follower);
         srv.become_candidate();
@@ -824,7 +853,7 @@ mod tests {
         )
         .unwrap();
         let (tx, _) = bounded(1);
-        let mut srv: Server<()> = Server::new(0, cfg, tx);
+        let mut srv: Server<()> = Server::new(0, cfg, tx, None);
         assert_eq!(srv.role, Role::Follower);
         srv.become_candidate();
         assert_eq!(srv.role, Role::Candidate);
@@ -849,7 +878,7 @@ mod tests {
         )
         .unwrap();
         let (tx, _) = bounded(1);
-        let mut srv: Server<()> = Server::new(0, cfg, tx);
+        let mut srv: Server<()> = Server::new(0, cfg, tx, None);
         srv.role = Role::Leader;
         srv.become_candidate();
     }
