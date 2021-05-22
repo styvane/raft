@@ -5,12 +5,11 @@ use async_std::channel;
 use async_std::net::TcpStream;
 use async_std::stream::StreamExt;
 use async_std::task;
-use raft_core::runtime::{ClientRequest, ConsensusReceiver};
+use raft_core::{ClientRequest, ConsensusReceiver};
 use raft_utils::send_frame;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 use std::{collections::HashMap, str::FromStr};
-//pub type ClientRequest = channel::Sender<CommandMessage>;
 
 /// The `Event` type represents the server events.
 #[derive(Debug)]
@@ -54,7 +53,7 @@ impl Event {
                 Event::Connection { stream } => {
                     if let Ok(addr) = (&*stream).peer_addr() {
                         if let Entry::Vacant(entry) = connections.entry(addr.to_string()) {
-                            let (sender, resp) = channel::bounded(1000);
+                            let (sender, resp) = channel::bounded(100);
                             entry.insert(sender);
                             task::spawn(write_stream(resp, stream));
                         }
@@ -78,13 +77,12 @@ impl Event {
                             let query = cmd.kind.clone();
                             if let Err(error) = requests.send(Box::new(cmd)).await {
                                 eprintln!("{:?} while sending client entry to raft broker", error);
-
-                                match consensus.await {
-                                    Ok(b) if b => {
-                                        value = storage.query(query).await.unwrap();
-                                    }
-                                    _ => (),
+                            }
+                            match consensus.await {
+                                Ok(b) if b => {
+                                    value = storage.query(query).await.unwrap();
                                 }
+                                _ => (),
                             }
                         }
                         if let Err(err) = ch.send(value).await {

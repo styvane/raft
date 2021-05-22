@@ -63,6 +63,7 @@ impl Server {
                     if msg.trim().is_empty() {
                         break;
                     }
+
                     let req = match serde_json::from_str(&msg) {
                         Ok(cmd) => {
                             let cmd: Command = cmd;
@@ -117,6 +118,7 @@ impl Server {
 
             let _handle = task::spawn(Self::read_stream(broker_tx.clone(), stream.clone()));
         }
+
         Ok(())
     }
 }

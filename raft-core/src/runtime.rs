@@ -1,12 +1,12 @@
-//! Async Runtime of the Raft server.
+//! Runtime of the Raft server.
 
 use crate::event::Message;
+use crate::server::ClientRequest;
 use crate::server::Server;
 use async_std::channel;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
-use futures::channel::oneshot;
 use futures::{select, FutureExt};
 use raft_utils::{recv_frame, send_frame};
 use rand::rngs::StdRng;
@@ -14,41 +14,23 @@ use rand::Rng;
 use rand::SeedableRng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::collections::hash_map;
-use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
 use std::time::Duration;
 
-const ELECTION_TIMEOUT_MIN: u64 = 5;
-const ELECTION_TIMEOUT_MAX: u64 = 10;
-const HEARTBEAT: u64 = 3;
-const MAX_MESSAGES: usize = 1000;
+const ELECTION_TIMEOUT_MIN: u64 = 9;
+const ELECTION_TIMEOUT_MAX: u64 = 15;
+const HEARTBEAT: u64 = 5;
+const MAX_MESSAGES: usize = 100;
 
 #[derive(Debug)]
 pub enum Event<T> {
     HeartBeat,
     Election,
     Message(Message<T>),
-    NewPeer { stream: Arc<TcpStream> },
 }
 
-pub type ConsensusSender = Option<oneshot::Sender<bool>>;
-pub type ConsensusReceiver = Option<oneshot::Receiver<bool>>;
+/// The `Request` is a channel for receiving messages send to the Raft leader.
 type Request<V> = channel::Receiver<Box<dyn ClientRequest<EntryKind = V>>>;
-
-/// The `ClientRequest` trait defines the behavior of the Raft client request.
-pub trait ClientRequest: Send {
-    type EntryKind;
-
-    fn entry_kind(&self) -> Self::EntryKind;
-    fn responder(self) -> ConsensusSender;
-}
-
-// pub fn start<V: Entry>(node_id: usize, config: Cluster) {
-//     let (messages, outgoing) = channel::bounded(MAX_MESSAGES);
-//     let server: Server<V> = Server::new(node_id, config, messages);
-// }
 
 /// Setup the runtime system.
 pub async fn setup<V>(
@@ -65,7 +47,8 @@ pub async fn setup<V>(
     let _handle = task::spawn(accept(netaddr, broker_tx.clone()));
 
     // Spawn message broker tasks.
-    let _handle = task::spawn(message_broker(broker_rx, outgoing, requests, raft_server));
+    let _handle = task::spawn(message_broker(broker_rx, requests, raft_server));
+    let _handle = task::spawn(send_message(outgoing));
 
     // Spawn task that emits event for Raft leader elections.
     let _handle = task::spawn(election_timeout(broker_tx.clone()));
@@ -85,14 +68,6 @@ where
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                let stream = Arc::new(stream);
-                let event = Event::NewPeer {
-                    stream: stream.clone(),
-                };
-                if let Err(error) = broker_sender.clone().send(event).await {
-                    eprintln!("{:?}", error);
-                    continue;
-                }
                 let _handle = task::spawn(recv_message(broker_sender.clone(), stream));
             }
             Err(error) => eprintln!("{:?}", error),
@@ -103,15 +78,12 @@ where
 /// Message broker between Raft peers.
 async fn message_broker<V>(
     incoming: channel::Receiver<Event<V>>,
-    outgoing: channel::Receiver<Message<V>>,
     client_requests: Request<V>,
     mut server: Server<V>,
 ) where
     V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
-    let mut connections = HashMap::new();
     let mut incoming = incoming.fuse();
-    let mut outgoing = outgoing.fuse();
     let mut client_requests = client_requests.fuse();
     loop {
         select! {
@@ -120,38 +92,22 @@ async fn message_broker<V>(
                     Event::Election => server.election_timeout(),
                     Event::HeartBeat => server.send_leader_heartbeat(),
                     Event::Message(msg) => server.handle_message(msg.event),
-                    Event::NewPeer {stream } => {
-                        if let Ok(addr) = stream.as_ref().peer_addr() {
-                            if let hash_map::Entry::Vacant(entry) = connections.entry(addr.to_string()) {
-                                let (tx, rx) = channel::bounded(MAX_MESSAGES);
-                                entry.insert(tx);
-                                let _handle = task::spawn(send_message(rx,  stream));
-                            }
-                        }
-                    }
-                }
+                };
             },
-            msg = outgoing.next().fuse() => if let Some(event) = msg {
-                if let Some(tx) = connections.get(&event.dest) {
-                    if let Err(error) = tx.send(event).await {
-                        eprintln!("{:?}", error);
-                    }
-                }
-            },
-
-            req = client_requests.next().fuse() => if let Some(msg) = req {
-                server.client_append_entry(msg.entry_kind());
+            req = client_requests.next().fuse() => if let Some(mut msg) = req {
+                 let response = msg.responder().take();
+                 server.client_append_entry(msg.entry_kind(), response);
             }
         }
     }
 }
 
 /// Receive messages from  a peer and send it to broker.
-async fn recv_message<V>(broker_sender: channel::Sender<Event<V>>, reader: Arc<TcpStream>)
+async fn recv_message<V>(broker_sender: channel::Sender<Event<V>>, mut reader: TcpStream)
 where
     V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
-    let mut stream = &*reader;
+    let mut stream = &mut reader;
     loop {
         while let Ok(msg) = recv_frame(&mut stream).await {
             if let Ok(event) = serde_json::from_str(&msg) {
@@ -195,15 +151,12 @@ where
 }
 
 ///  Send the Raft server messages to the appropriate peer.
-async fn send_message<V>(
-    mut outgoing_messages: channel::Receiver<Message<V>>,
-    writer: Arc<TcpStream>,
-) where
+async fn send_message<V>(mut outgoing_messages: channel::Receiver<Message<V>>)
+where
     V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
-    let mut stream = &*writer;
-    loop {
-        while let Some(msg) = outgoing_messages.next().await {
+    while let Some(msg) = outgoing_messages.next().await {
+        if let Ok(mut stream) = TcpStream::connect(&msg.dest).await {
             let msg = serde_json::to_string(&msg).unwrap();
             let msg = msg.as_bytes();
             if let Err(error) = send_frame(&mut stream, msg).await {

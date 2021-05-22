@@ -9,9 +9,26 @@ use crate::log::{Entry, Log};
 use crate::types::{Index, Term};
 use async_std::channel::Sender;
 use async_std::task;
+use futures::channel::oneshot;
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+
+/// Optional channel for sending messages to client when there is consensus.
+pub type ConsensusSender = Option<oneshot::Sender<bool>>;
+
+/// Optional channel for receiving messages from the Raft leader.
+/// Then client will apply the log to the state machine based on
+/// the message received on this channel.
+pub type ConsensusReceiver = Option<oneshot::Receiver<bool>>;
+
+/// The `ClientRequest` trait defines the behavior of the Raft client request.
+pub trait ClientRequest: Send {
+    type EntryKind;
+
+    fn entry_kind(&self) -> Self::EntryKind;
+    fn responder(&mut self) -> &mut ConsensusSender;
+}
 
 /// The type `Server` is the raft server.
 #[derive(Debug)]
@@ -58,6 +75,9 @@ pub struct Server<V> {
 
     // Emitted server events and destination.
     messages: Sender<Message<V>>,
+
+    // Waiting entries to be committed.
+    waiting: HashMap<usize, oneshot::Sender<bool>>,
 }
 
 impl<V> fmt::Display for Server<V>
@@ -111,6 +131,7 @@ where
             followers_heartbeat: HashSet::with_capacity(size),
             has_heard_from_leader: false,
             messages,
+            waiting: HashMap::new(),
         }
     }
 
@@ -137,6 +158,7 @@ where
             followers_heartbeat: HashSet::with_capacity(size),
             has_heard_from_leader: false,
             messages,
+            waiting: HashMap::new(),
         }
     }
 
@@ -176,7 +198,6 @@ where
             "Only candidate can become leader after winning an election"
         );
 
-        println!("{}", self);
         self.role = Role::Leader;
         // Leader initializes all the next index for each follower.
         // See TLA⁺ spec L232
@@ -195,6 +216,8 @@ where
         {
             self.broadcast_append_entries();
         }
+
+        println!("{}", self);
     }
 
     /// This method change the server's role to [`Role::Candidate`].
@@ -247,7 +270,7 @@ where
     }
 
     /// Handle client requests.
-    pub fn client_append_entry(&mut self, data: V) {
+    pub fn client_append_entry(&mut self, data: V, response: ConsensusSender) {
         if self.role != Role::Leader {
             return;
         }
@@ -264,6 +287,13 @@ where
             .append_entries(self.log.previous_index(), self.log.previous_term(), &entry)
             .is_ok()
         {
+            if let Some(ch) = self.waiting.remove(&self.log.previous_index().unwrap()) {
+                if let Err(error) = ch.send(false) {
+                    eprintln!("unable to send consensus: {:?}", error);
+                }
+            } else if let Some(ch) = response {
+                self.waiting.insert(self.log.previous_index().unwrap(), ch);
+            }
             self.broadcast_append_entries();
         }
         println!("{}", self);
@@ -356,10 +386,25 @@ where
                 }
             }
             if self.commit_index > self.last_applied {
+                println!("{:?}", self.waiting);
                 // Apply log to the state machine
-                // ....
+                let mut index = self.commit_index.clone().unwrap();
 
-                // Update index of last log applied.
+                loop {
+                    if self.last_applied.is_none()
+                        || index > self.last_applied.clone().unwrap_or_default()
+                    {
+                        // Update index of last log applied.
+                        if let Some(ch) = self.waiting.remove(&index) {
+                            if let Err(error) = ch.send(true) {
+                                eprintln!("{:?}", error);
+                            }
+                        };
+                        index -= 1;
+                    } else {
+                        break;
+                    }
+                }
                 self.last_applied = self.commit_index;
             }
         }
@@ -409,9 +454,27 @@ where
             }
 
             if self.commit_index > self.last_applied {
-                // Do application request
-
                 // Update last applied index.
+                println!("{:?}", self.waiting);
+                // Apply log to the state machine
+                let mut index = self.commit_index.clone().unwrap();
+
+                loop {
+                    if self.last_applied.is_none()
+                        || index > self.last_applied.clone().unwrap_or_default()
+                    {
+                        // Update index of last log applied.
+                        if let Some(ch) = self.waiting.remove(&index) {
+                            if let Err(error) = ch.send(true) {
+                                eprintln!("{:?}", error);
+                            }
+                        };
+                        index -= 1;
+                    } else {
+                        break;
+                    }
+                }
+
                 self.last_applied = self.commit_index;
             }
         } else {
@@ -682,7 +745,7 @@ mod tests {
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
-            srv0.client_append_entry('m');
+            srv0.client_append_entry('m', None);
         }
 
         process_events(&mut servers, &mut receivers);
@@ -792,14 +855,14 @@ mod tests {
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
-            srv0.client_append_entry('m');
+            srv0.client_append_entry('m', None);
         }
 
         process_events(&mut servers, &mut receivers);
 
         {
             let srv0 = &mut servers[0];
-            srv0.client_append_entry('n');
+            srv0.client_append_entry('n', None);
         }
 
         process_events(&mut servers, &mut receivers);
@@ -808,7 +871,7 @@ mod tests {
 
         {
             let srv0 = &mut servers[0];
-            srv0.client_append_entry('o');
+            srv0.client_append_entry('o', None);
         }
 
         process_events(&mut servers, &mut receivers);
@@ -960,7 +1023,7 @@ mod tests {
         assert_eq!(servers[2].current_term, Some(5));
         {
             let srv0 = &mut servers[0];
-            srv0.client_append_entry('m');
+            srv0.client_append_entry('m', None);
         }
 
         process_events(&mut servers, &mut receivers);
@@ -1000,7 +1063,7 @@ mod tests {
         assert_eq!(servers[0].current_term, Some(1));
         {
             let srv0 = &mut servers[0];
-            srv0.client_append_entry('a');
+            srv0.client_append_entry('a', None);
         }
         process_events(&mut servers, &mut receivers);
         assert_eq!(servers[0].last_applied, Some(0));
@@ -1016,7 +1079,7 @@ mod tests {
 
         {
             let srv0 = &mut servers[0];
-            srv0.client_append_entry('b');
+            srv0.client_append_entry('b', None);
         }
         process_events(&mut servers, &mut receivers);
         assert_eq!(servers[0].last_applied, Some(1));

@@ -1,5 +1,5 @@
 use futures::channel::oneshot;
-use raft_core::runtime::{ClientRequest, ConsensusSender};
+use raft_core::{ClientRequest, ConsensusSender};
 
 /// The `Command` type represents the available database command.
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,7 @@ impl ClientRequest for CommandMessage {
         self.kind.clone()
     }
 
-    fn responder(self) -> ConsensusSender {
-        self.response
+    fn responder(&mut self) -> &mut ConsensusSender {
+        &mut self.response
     }
 }
