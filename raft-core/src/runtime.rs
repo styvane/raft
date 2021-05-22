@@ -14,6 +14,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::collections::hash_map::{Entry, HashMap};
 use std::fmt;
 use std::time::Duration;
 
@@ -155,13 +156,19 @@ async fn send_message<V>(mut outgoing_messages: channel::Receiver<Message<V>>)
 where
     V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
+    let mut peers = HashMap::new();
     while let Some(msg) = outgoing_messages.next().await {
-        if let Ok(mut stream) = TcpStream::connect(&msg.dest).await {
-            let msg = serde_json::to_string(&msg).unwrap();
-            let msg = msg.as_bytes();
-            if let Err(error) = send_frame(&mut stream, msg).await {
-                eprintln!("{:?}", error);
+        if let Entry::Vacant(entry) = peers.entry(msg.dest.clone()) {
+            if let Ok(stream) = TcpStream::connect(&msg.dest).await {
+                entry.insert(stream);
             }
+        };
+
+        let mut stream = peers.get(&msg.dest).cloned().unwrap();
+        let msg = serde_json::to_string(&msg).unwrap();
+        let msg = msg.as_bytes();
+        if let Err(error) = send_frame(&mut stream, msg).await {
+            eprintln!("{:?}", error);
         }
     }
 }

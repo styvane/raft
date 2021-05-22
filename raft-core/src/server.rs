@@ -386,7 +386,6 @@ where
                 }
             }
             if self.commit_index > self.last_applied {
-                println!("{:?}", self.waiting);
                 // Apply log to the state machine
                 let mut index = self.commit_index.clone().unwrap();
 
@@ -400,6 +399,10 @@ where
                                 eprintln!("{:?}", error);
                             }
                         };
+
+                        if index == 0 {
+                            break;
+                        }
                         index -= 1;
                     } else {
                         break;
@@ -454,8 +457,6 @@ where
             }
 
             if self.commit_index > self.last_applied {
-                // Update last applied index.
-                println!("{:?}", self.waiting);
                 // Apply log to the state machine
                 let mut index = self.commit_index.clone().unwrap();
 
@@ -469,12 +470,16 @@ where
                                 eprintln!("{:?}", error);
                             }
                         };
+                        if index == 0 {
+                            break;
+                        }
                         index -= 1;
                     } else {
                         break;
                     }
                 }
 
+                // Update last applied index.
                 self.last_applied = self.commit_index;
             }
         } else {
