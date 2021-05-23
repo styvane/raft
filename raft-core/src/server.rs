@@ -181,11 +181,6 @@ where
         }
     }
 
-    /// Return server's id.
-    pub fn get_id(&self) -> usize {
-        self.id
-    }
-
     /// Return servers's hostname.
     pub fn hostname(&self) -> String {
         self.config.get(&self.id).hostname().to_string()
@@ -673,42 +668,34 @@ mod tests {
     fn fig7_paper_servers() -> (Vec<Server<char>>, Vec<Receiver<Message<char>>>) {
         let config = Cluster::from_str(
             r#"
-	        id = "raft"
-
-                [[members]]
-	        id = 0
-	        host = "0"
-
-                [[members]]
-		id = 1
-		host = "1"
-
-
-                [[members]]
-		id = 2
-		host = "2"
-
-
-                [[members]]
-		id = 3
-		host = "3"
-
-
-                [[members]]
-		id = 4
-		host = "4"
-
-
-                [[members]]
-		id = 5
-		host = "5"
-
-
-                [[members]]
-		id = 6
-		host = "6"
+            systemLog:
+              destination: "console"
+              path: "raft.log"
+              debug: true
+    
+            replication:
+              id: "raft"
+              members:
+              - id: 0
+                host: "0"
+                me: true
+              - id: 1
+                host: "1"
+              - id: 2
+                host: "2"
+              - id: 3
+                host: "3"
+              - id: 4
+                host: "4"
+              - id: 5
+                host: "5"
+              - id: 6
+                host: "6"
+              verbosity:
+                election: true
+                heartbeats: true
             "#,
-            FileFormat::Toml,
+            FileFormat::Yaml,
         )
         .unwrap();
 
@@ -734,32 +721,30 @@ mod tests {
 
         let config = Cluster::from_str(
             r#"
-	        id = "raft"
-
-                [[members]]
-	        id = 0
-	        host = "0"
-
-                [[members]]
-		id = 1
-		host = "1"
-
-
-                [[members]]
-		id = 2
-		host = "2"
-
-
-                [[members]]
-		id = 3
-		host = "3"
-
-
-                [[members]]
-		id = 4
-		host = "4"
+            systemLog:
+              destination: "console"
+              path: "raft.log"
+              debug: true
+    
+            replication:
+              id: "raft"
+              members:
+              - id: 0
+                host: "0"
+                me: true
+              - id: 1
+                host: "1"
+              - id: 2
+                host: "2"
+              - id: 3
+                host: "3"
+              - id: 4
+                host: "4"
+              verbosity:
+                election: true
+                heartbeats: true
             "#,
-            FileFormat::Toml,
+            FileFormat::Yaml,
         )
         .unwrap();
         let mut messages = Vec::with_capacity(size);
@@ -799,13 +784,22 @@ mod tests {
     fn test_not_transition_leader_without_being_candidate() {
         let cfg = Cluster::from_str(
             r#"
-	        id = "raft"
-
-                [[members]]
-	        id = 0
-	        host = "0"
+            systemLog:
+              destination: "console"
+              path: "raft.log"
+              debug: true
+    
+            replication:
+              id: "raft"
+              members:
+              - id: 0
+                host: "0"
+                me: true
+            verbosity:
+              election: true
+            heartbeats: true
             "#,
-            FileFormat::Toml,
+            FileFormat::Yaml,
         )
         .unwrap();
         let (tx, _) = bounded(0);
@@ -818,13 +812,22 @@ mod tests {
     fn test_become_candidate() {
         let cfg = Cluster::from_str(
             r#"
-	        id = "raft"
-
-                [[members]]
-	        id = 0
-	        host = "0"
+            systemLog:
+              destination: "console"
+              path: "raft.log"
+              debug: true
+    
+            replication:
+              id: "raft"
+              members:
+              - id: 0
+                host: "0"
+                me: true
+              verbosity:
+                election: true
+                heartbeats: true
             "#,
-            FileFormat::Toml,
+            FileFormat::Yaml,
         )
         .unwrap();
         let (tx, _) = bounded(1);
@@ -843,13 +846,22 @@ mod tests {
     fn test_become_leader() {
         let cfg = Cluster::from_str(
             r#"
-	        id = "raft"
-
-                [[members]]
-	        id = 0
-	        host = "0"
+            systemLog:
+              destination: "console"
+              path: "raft.log"
+              debug: true
+    
+            replication:
+              id: "raft"
+              members:
+              - id: 0
+                host: "0"
+                me: true
+              verbosity:
+                election: true
+                heartbeats: true
             "#,
-            FileFormat::Toml,
+            FileFormat::Yaml,
         )
         .unwrap();
         let (tx, _) = bounded(1);
@@ -868,13 +880,22 @@ mod tests {
     fn test_leader_cannot_become_candidate() {
         let cfg = Cluster::from_str(
             r#"
-	        id = "raft"
-
-                [[members]]
-	        id = 0
-	        host = "0"
+            systemLog:
+              destination: "console"
+              path: "raft.log"
+              debug: true
+    
+            replication:
+              id: "raft"
+              members:
+              - id: 0
+                host: "0"
+                me: true
+              verbosity:
+                election: true
+                heartbeats: true
             "#,
-            FileFormat::Toml,
+            FileFormat::Yaml,
         )
         .unwrap();
         let (tx, _) = bounded(1);

@@ -10,13 +10,48 @@ use std::slice::Iter;
 pub struct Member {
     id: usize,
     host: String,
+
+    #[serde(default)]
+    me: bool,
+}
+
+/// Verbosity configuration.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Verbosity {
+    #[serde(default)]
+    election: bool,
+
+    #[serde(default)]
+    heartbeats: bool,
+}
+
+/// Replication configuration.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Replication {
+    id: String,
+    members: Vec<Member>,
+    verbosity: Verbosity,
+}
+
+/// System log configuration.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct SystemLog {
+    #[serde(default)]
+    destination: String,
+
+    #[serde(default)]
+    path: String,
+
+    #[serde(default)]
+    debug: bool,
 }
 
 /// Cluster configuration.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Cluster {
-    id: String,
-    members: Vec<Member>,
+    #[serde(rename(deserialize = "systemLog"))]
+    system_log: SystemLog,
+    replication: Replication,
 }
 
 impl Cluster {
@@ -29,9 +64,12 @@ impl Cluster {
     }
 
     /// Create a cluster configuration from a path.
-    pub fn from_path(path: &Path) -> anyhow::Result<Self> {
+    pub fn from_path<P>(path: P) -> anyhow::Result<Self>
+    where
+        P: AsRef<Path>,
+    {
         let mut cfg = Configure::new();
-        cfg.merge(File::with_name(path.to_str().unwrap()))?;
+        cfg.merge(File::with_name(path.as_ref().to_str().unwrap()))?;
         let cfg = cfg.try_into::<Self>()?;
         Ok(cfg)
     }
@@ -39,17 +77,22 @@ impl Cluster {
     /// This method returns the configuration of the member associated with
     /// the given Id.
     pub fn get(&self, id: &usize) -> Member {
-        self.members[*id].clone()
+        self.replication
+            .members
+            .iter()
+            .find(|m| m.id == *id)
+            .unwrap()
+            .clone()
     }
 
     /// Return the size of the cluster.
     pub fn size(&self) -> usize {
-        self.members.len()
+        self.replication.members.len()
     }
 
     /// Return an iterator over a slice of all members in the cluster.
     pub fn members_iter(&self) -> Iter<Member> {
-        self.members.iter()
+        self.replication.members.iter()
     }
 }
 
@@ -73,21 +116,30 @@ mod tests {
     fn test_new() {
         let config = Cluster::from_str(
             r#"
-	        id = "raft"
-                [[members]]
-	        id = 0
-	        host = "0"
-
-                [[members]]
-		id = 1
-		host = "1"
+            systemLog:
+              destination: "console"
+              path: ""
+              debug: true
+    
+            replication:
+              id: "raft"
+              members:
+              - id: 0
+                host: "0"
+                me: true
+              - id: 1
+                host: "1"
+              verbosity:
+                election: true
+                heartbeats: true
             "#,
-            FileFormat::Toml,
+            FileFormat::Yaml,
         );
         assert_eq!(
             config.unwrap().get(&0),
             Member {
                 id: 0,
+                me: true,
                 host: "0".to_string()
             }
         )
