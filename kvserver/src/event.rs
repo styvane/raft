@@ -5,6 +5,7 @@ use async_std::channel;
 use async_std::net::TcpStream;
 use async_std::task;
 use futures::{select, FutureExt, StreamExt};
+use log::{error, info};
 use raft_core::{ClientRequest, ConsensusReceiver};
 use raft_utils::send_frame;
 use std::collections::hash_map::Entry;
@@ -54,7 +55,10 @@ impl Event {
         loop {
             select! {
                 msg = commits.next().fuse() => if let Some(cmd) = msg {
-                    let _ = storage.query(cmd).await;
+                    match storage.query(cmd).await {
+                        Some(_) => info!("commit successfully applied"),
+                        None => error!("unable to applied committed log to state machine"),
+                    }
                 },
                 msg = events.next().fuse()  => if let Some(event) = msg {
                     match event {
@@ -63,7 +67,7 @@ impl Event {
                                 if let Entry::Vacant(entry) = connections.entry(addr.to_string()) {
                                     let (sender, resp) = channel::bounded(100);
                                     entry.insert(sender);
-                                    task::spawn(write_stream(resp, stream));
+                                    let _handle = task::spawn(write_stream(resp, stream));
                                 }
                             }
                         }
@@ -75,26 +79,33 @@ impl Event {
                             if let Some(ch) = connections.get(&sender) {
                                 if let Command::Invalid(value) = cmd.kind {
                                     let value = Value::from_str(&value).unwrap();
-                                    if let Err(err) = ch.send(value).await {
-                                        eprintln!("{:?} while sending query result: {}", err, &sender);
+                                    match ch.send(value).await {
+                                        Ok(_) => info!("message send to {}", &sender),
+                                        Err(err) =>
+                                        error!("{:?} while sending query result: {}", err, &sender),
                                     }
                                     continue;
                                 }
                                 let mut value: Value = "unproccessable entity".parse().unwrap();
                                 if let Some(consensus) = consensus {
                                     let query = cmd.kind.clone();
-                                    if let Err(error) = requests.send(Box::new(cmd)).await {
-                                        eprintln!("{:?} while sending client entry to raft broker", error);
+
+                                    match requests.send(Box::new(cmd)).await {
+                                        Ok(_) => info!("client entry successfully sent to raft broker"),
+                                        Err(err) =>  error!("{:?} while sending client entry to raft broker", err),
                                     }
                                     match consensus.await {
                                         Ok(b) if b => {
+                                            info!("got consensus: applying command");
                                             value = storage.query(query).await.unwrap();
                                         }
-                                        _ => (),
+                                        Err(err) => info!("consensus not reached: {}", err),
+                                        _ => info!("consensus not reached"),
                                     }
                                 }
-                                if let Err(err) = ch.send(value).await {
-                                    eprintln!("{:?} while sending query result: {}", err, &sender);
+                                match ch.send(value).await {
+                                    Ok(_) => info!("message successfully send to {}", &sender),
+                                    Err(err) => error!("{:?} while sending query result: {}", err, &sender),
                                 }
                             }
                         }
@@ -109,8 +120,9 @@ pub async fn write_stream(mut receiver: channel::Receiver<Value>, writer: Arc<Tc
     let mut stream = &*writer;
     while let Some(v) = receiver.next().await {
         if let Ok(data) = serde_json::to_string(&v) {
-            if let Err(e) = send_frame(&mut stream, data.as_bytes()).await {
-                eprintln!("{:?}", e);
+            match send_frame(&mut stream, data.as_bytes()).await {
+                Ok(_) => info!("frame successfully sent"),
+                Err(e) => error!("unable to send frame {:?}", e),
             }
         }
     }

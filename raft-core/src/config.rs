@@ -19,10 +19,10 @@ pub struct Member {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Verbosity {
     #[serde(default)]
-    election: bool,
+    pub election: bool,
 
     #[serde(default)]
-    heartbeats: bool,
+    pub heartbeats: bool,
 }
 
 /// Replication configuration.
@@ -30,7 +30,7 @@ pub struct Verbosity {
 pub struct Replication {
     id: String,
     members: Vec<Member>,
-    verbosity: Verbosity,
+    pub verbosity: Verbosity,
 }
 
 /// System log configuration.
@@ -40,18 +40,18 @@ pub struct SystemLog {
     destination: String,
 
     #[serde(default)]
-    path: String,
+    pub path: String,
 
     #[serde(default)]
-    debug: bool,
+    pub debug: bool,
 }
 
 /// Cluster configuration.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Cluster {
     #[serde(rename(deserialize = "systemLog"))]
-    system_log: SystemLog,
-    replication: Replication,
+    pub system_log: SystemLog,
+    pub replication: Replication,
 }
 
 impl Cluster {
@@ -93,6 +93,21 @@ impl Cluster {
     /// Return an iterator over a slice of all members in the cluster.
     pub fn members_iter(&self) -> Iter<Member> {
         self.replication.members.iter()
+    }
+
+    /// Return the log path.
+    pub fn log_path(&self) -> String {
+        self.system_log.path.clone()
+    }
+
+    /// Return the log path.
+    pub fn log_destination(&self) -> String {
+        self.system_log.destination.clone()
+    }
+
+    /// Return debug mode flag value.
+    pub fn debug(&self) -> bool {
+        self.system_log.debug
     }
 }
 

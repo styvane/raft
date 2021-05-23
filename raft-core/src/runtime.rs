@@ -8,6 +8,7 @@ use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
 use async_std::task;
 use futures::{select, FutureExt};
+use log::{error, info};
 use raft_utils::{recv_frame, send_frame};
 use rand::rngs::StdRng;
 use rand::Rng;
@@ -68,10 +69,11 @@ where
     let listener = TcpListener::bind(netaddr).await?;
     loop {
         match listener.accept().await {
-            Ok((stream, _)) => {
+            Ok((stream, addr)) => {
+                info!("new connection received: {}", addr.to_string());
                 let _handle = task::spawn(recv_message(broker_sender.clone(), stream));
             }
-            Err(error) => eprintln!("{:?}", error),
+            Err(err) => error!("{:?}", err),
         }
     }
 }
@@ -114,7 +116,7 @@ where
             if let Ok(event) = serde_json::from_str(&msg) {
                 let msg = Event::Message(event);
                 if let Err(err) = broker_sender.send(msg).await {
-                    eprintln!("{:?}", err);
+                    error!("{:?}", err);
                 }
             }
         }
@@ -131,8 +133,9 @@ where
         let dur = rng.gen_range(ELECTION_TIMEOUT_MIN..ELECTION_TIMEOUT_MAX);
         let period = Duration::from_secs(dur);
         task::sleep(period).await;
-        if let Err(error) = broker_sender.send(Event::Election).await {
-            eprintln!("{:?}", error);
+        match broker_sender.send(Event::Election).await {
+            Ok(_) => info!("emitting election timeout event"),
+            Err(err) => error!("unable to send message for election timeout {:?}", err),
         }
     }
 }
@@ -145,8 +148,9 @@ where
     let period = Duration::from_secs(HEARTBEAT);
     loop {
         task::sleep(period).await;
-        if let Err(error) = broker_sender.send(Event::HeartBeat).await {
-            eprintln!("{:?}", error);
+        match broker_sender.send(Event::HeartBeat).await {
+            Ok(_) => info!("emitting heartbeat event"),
+            Err(err) => error!("{:?}", err),
         }
     }
 }
@@ -164,11 +168,16 @@ where
             }
         };
 
-        let mut stream = peers.get(&msg.dest).cloned().unwrap();
-        let msg = serde_json::to_string(&msg).unwrap();
-        let msg = msg.as_bytes();
-        if let Err(error) = send_frame(&mut stream, msg).await {
-            eprintln!("{:?}", error);
+        match peers.get(&msg.dest).cloned() {
+            Some(mut stream) => {
+                let msg = serde_json::to_string(&msg).unwrap();
+                let msg = msg.as_bytes();
+                if let Err(error) = send_frame(&mut stream, msg).await {
+                    error!("{:?}", error);
+                }
+            }
+
+            None => info!("unable to reach destination: {}", &msg.dest),
         }
     }
 }

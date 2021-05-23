@@ -7,6 +7,7 @@ use async_std::channel;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::task;
 use futures::channel::oneshot;
+use log::{error, info};
 use raft_core::{runtime, server, Cluster};
 use raft_utils::recv_frame;
 use serde::Deserialize;
@@ -14,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use structopt::StructOpt;
 
+/// Maximum incoming connections
 const CONNEXION_MAX: usize = 100;
 
 #[derive(Debug, StructOpt, Deserialize)]
@@ -38,14 +40,16 @@ pub struct ServerOptions {
 pub struct Server {
     options: ServerOptions,
     storage: Option<Storage>,
+    config: Cluster,
 }
 
 impl Server {
     /// Create a new server.
-    pub fn new(options: ServerOptions, storage: Storage) -> Self {
+    pub fn new(options: ServerOptions, storage: Storage, config: Cluster) -> Self {
         Server {
             options,
             storage: Some(storage),
+            config,
         }
     }
 
@@ -66,19 +70,24 @@ impl Server {
             client_sender,
             commit_rx,
         ));
-        let cfg = Cluster::from_path(self.options.config.as_path()).unwrap();
 
         let _runtime_handle = task::spawn(runtime::setup::<Command>(
             outgoing,
             requests,
-            server::Server::new(self.options.node_id, cfg, messages, Some(commit_tx)),
+            server::Server::new(
+                self.options.node_id,
+                self.config.clone(),
+                messages,
+                Some(commit_tx),
+            ),
         ));
 
-        while let Ok((stream, _)) = listener.accept().await {
+        while let Ok((stream, addr)) = listener.accept().await {
             let stream = Arc::new(stream);
             let event = Event::new_connection(stream.clone());
-            if let Err(e) = broker_tx.send(event).await {
-                eprintln!("{:?}", e);
+            match broker_tx.send(event).await {
+                Ok(_) => info!("incoming connection from {}", addr.to_string()),
+                Err(e) => error!("{:?}", e),
             }
 
             let _handle = task::spawn(read_stream(broker_tx.clone(), stream.clone()));
@@ -95,7 +104,7 @@ pub async fn read_stream(sender: channel::Sender<Event>, reader: Arc<TcpStream>)
         let mut stream = &*reader;
         match recv_frame(&mut stream).await {
             Err(error) => {
-                eprintln!("{:?}", error);
+                error!("{:?}", error);
             }
             Ok(msg) => {
                 if msg.trim().is_empty() {
@@ -123,7 +132,7 @@ pub async fn read_stream(sender: channel::Sender<Event>, reader: Arc<TcpStream>)
                 };
 
                 if let Err(e) = sender.send(req).await {
-                    eprintln!("{:?}", e);
+                    error!("{:?}", e);
                 }
             }
         }

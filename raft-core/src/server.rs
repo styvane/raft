@@ -10,6 +10,7 @@ use crate::types::{Index, Term};
 use async_std::channel::Sender;
 use async_std::task;
 use futures::channel::oneshot;
+use log::{error, info};
 use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -231,7 +232,7 @@ where
             self.broadcast_append_entries();
         }
 
-        println!("{}", self);
+        info!("{}", self);
     }
 
     /// This method change the server's role to [`Role::Candidate`].
@@ -245,7 +246,8 @@ where
             "leader should never became candidate or follower"
         );
 
-        println!("{}", self);
+        info!("{}", self);
+
         // After becoming a candidate, increase self current term.
         // See TLA⁺ spec.
         self.current_term
@@ -302,15 +304,15 @@ where
             .is_ok()
         {
             if let Some(ch) = self.waiting.remove(&self.log.previous_index().unwrap()) {
-                if let Err(error) = ch.send(false) {
-                    eprintln!("unable to send consensus: {:?}", error);
+                if let Err(err) = ch.send(false) {
+                    error!("unable to send consensus: {:?}", err);
                 }
             } else if let Some(ch) = response {
                 self.waiting.insert(self.log.previous_index().unwrap(), ch);
             }
             self.broadcast_append_entries();
         }
-        println!("{}", self);
+        info!("{}", self);
     }
 
     /// Send AppendEntries RPC to all peers.
@@ -359,12 +361,39 @@ where
     /// Send the message out.
     fn send(&mut self, peer: &str, event: Event<V>) {
         task::block_on(async {
-            if let Err(error) = self.messages.send(Message::new(&peer, event)).await {
-                eprintln!("{:?}", error);
+            if let Err(err) = self.messages.send(Message::new(&peer, event)).await {
+                error!("unable to send messages: {:?}", err);
             }
         });
     }
 
+    /// Send messages for followers to apply pending committed logs.
+    fn apply_followers_commits_logs(&mut self) {
+        let mut index = self.commit_index.clone().unwrap();
+        loop {
+            if self.last_applied.is_none() || index > self.last_applied.clone().unwrap_or_default()
+            {
+                if let Some(ref commits) = self.commits {
+                    task::block_on(async {
+                        if let Err(err) = commits
+                            .clone()
+                            .send(self.log.entries[index].clone().value)
+                            .await
+                        {
+                            error!("request for applying follower's log failed: {:?}", err);
+                        }
+                    })
+                }
+
+                if index == 0 {
+                    break;
+                }
+                index -= 1;
+            } else {
+                break;
+            }
+        }
+    }
     /// Handle AppendEntries request from the leader.
     fn handle_append_entries_request(&mut self, request: AppendEntries<V>) {
         // The leader should ignore any received AppendEntries RPC call.
@@ -401,32 +430,7 @@ where
             }
             if self.commit_index > self.last_applied {
                 // Apply log to the state machine
-                let mut index = self.commit_index.clone().unwrap();
-                loop {
-                    if self.last_applied.is_none()
-                        || index > self.last_applied.clone().unwrap_or_default()
-                    {
-                        if let Some(ref commits) = self.commits {
-                            task::block_on(async {
-                                if let Err(error) = commits
-                                    .clone()
-                                    .send(self.log.entries[index].clone().value)
-                                    .await
-                                {
-                                    eprintln!("{:?}", error);
-                                }
-                            })
-                        }
-
-                        if index == 0 {
-                            break;
-                        }
-                        index -= 1;
-                    } else {
-                        break;
-                    }
-                }
-
+                self.apply_followers_commits_logs();
                 // Update index of last log applied.
                 self.last_applied = self.commit_index;
             }
@@ -440,7 +444,7 @@ where
             &dest,
             &source,
         );
-        println!("{}", self);
+        info!("{}", self);
         self.send(&source, resp);
     }
 
@@ -453,8 +457,8 @@ where
             {
                 // Update index of last log applied.
                 if let Some(ch) = self.waiting.remove(&index) {
-                    if let Err(error) = ch.send(true) {
-                        eprintln!("{:?}", error);
+                    if let Err(err) = ch.send(true) {
+                        error!("unable to send client reply: {:?}", err);
                     }
                 };
                 if index == 0 {
