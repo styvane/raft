@@ -1,6 +1,8 @@
 raft
 ====
 
+[<img alt="https://github.com/styvane/raft/actions?query=branch%3Amain" src="https://img.shields.io/github/workflow/status/styvane/raft/CI/main">](https://github.com/styvane/raft/actions?query=branch%3Amain)
+
 
 This is my second attempt implementing the [Raft](https://raft.github.io/raft.pdf) consensus algorithm.
 
@@ -43,5 +45,3 @@ Not that leader discovery has not been implemented yet. So you will need to watc
 ```
 ./target/debug/kvserver-client --port 23000 
 ```
-
-[<img alt="https://github.com/styvane/raft/actions?query=branch%3Amain" src="https://img.shields.io/github/workflow/status/styvane/raft/CI/main">](https://github.com/styvane/raft/actions?query=branch%3Amain)
