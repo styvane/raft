@@ -19,7 +19,8 @@ TODO
 - Leader discovery and confirmation
 - Append only *write* operation entry
 - Persist log and non volatiles states.
-- ...
+- Graceful shutdown
+
 
 Run
 ---
