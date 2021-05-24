@@ -4,7 +4,7 @@ raft
 [<img alt="https://github.com/styvane/raft/actions?query=branch%3Amain" src="https://img.shields.io/github/workflow/status/styvane/raft/CI/main">](https://github.com/styvane/raft/actions?query=branch%3Amain)
 
 
-This is my second attempt implementing the [Raft](https://raft.github.io/raft.pdf) consensus algorithm.
+This is *another* attempt implementing the [Raft](https://raft.github.io/raft.pdf) consensus algorithm.
 
 It's not production code and does not support persistence of the key/value store.
 
