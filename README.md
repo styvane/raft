@@ -6,9 +6,9 @@ raft
 
 This is *another* attempt implementing the [Raft](https://raft.github.io/raft.pdf) consensus algorithm.
 
-It's not production code and does not support persistence of the key/value store.
+It's not production code and does not support the persistence of the key/value store.
 
-The following were not implemented:
+I did not implement the following ideas in the paper:
 
 - Persistency(all states are volatiles).
 - Cluster membership changes
@@ -17,19 +17,19 @@ The following were not implemented:
 TODO
 ----
 
-- Add Log trait for that defines the Raft log behavior
+- Add Log trait that defines the Raft log behavior
 - Leader discovery and confirmation
 - Append only *write* operation entry
-- Persist log and non volatiles states.
+- Persist log and non-volatiles states.
 - Graceful shutdown
 
 
 Run
 ---
 
-To run this we need a configuration see [example](config.example.yaml).
+To run this, we need a configuration see [example](config.example.yaml).
 
-We will then start the following processes. The numbers of processes depends on the configuration. 
+We will then start the following processes. The number of processes depends on the configuration. 
 
 ```
 ./target/debug/kvserver --config config.yaml --node-id 0 --port 21000
@@ -39,8 +39,8 @@ We will then start the following processes. The numbers of processes depends on 
 ./target/debug/kvserver --config config.yaml --node-id 4 --port 25000
 ```
 
-Using the client to connect to the leader then Set/Get/Delete values.
-Not that leader discovery has not been implemented yet. So you will need to watch the log to identifier the leader.
+Using the client to connect to the leader, then Set/Get/Delete values.
+I did not implement leader discovery, so you will need to watch the log to identifier the leader.
 
 ```
 ./target/debug/kvserver-client --port 23000 
