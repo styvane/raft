@@ -3,55 +3,82 @@
 use crate::types::{Index, Term};
 use anyhow::{self, bail};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Entry owns the data for the log entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-pub struct Entry<V> {
+pub struct Entry<Data> {
     pub term: usize,
-    pub value: V,
+    pub data: Data,
 }
 
 /// A set of log entries.
-pub type Entries<V> = Vec<Entry<V>>;
+pub type Entries<Data> = Vec<Entry<Data>>;
 
-impl<V> Entry<V> {
-    pub fn new(term: usize, value: V) -> Self {
-        Entry { term, value }
+impl<Data> Entry<Data> {
+    pub const fn new(term: usize, data: Data) -> Self {
+        Entry { term, data }
+    }
+}
+/// The `Log` trait defines the
+pub trait Log: fmt::Display {
+    type Item;
+
+    fn len(&self) -> usize;
+    fn previous_term(&self) -> Term;
+    fn previous_index(&self) -> Term;
+    fn get_entries(&self) -> &[Self::Item];
+    fn append_entries(
+        &mut self,
+        previous_index: Index,
+        previous_term: Term,
+        entries: &[Self::Item],
+    ) -> anyhow::Result<()>;
+}
+
+/// The `InMemoryLog` type stores all the Raft server's logs in memory.
+#[derive(Debug)]
+pub struct InMemory<Data> {
+    pub(crate) entries: Vec<Entry<Data>>,
+}
+
+impl<Data> InMemory<Data> {
+    /// Returns the number of elements in the log.
+    /// Returns true if log has length 0.
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 }
 
-/// The `Log` type owns all the log for a Raft server
-#[derive(Debug)]
-pub struct Log<V> {
-    pub(crate) entries: Vec<Entry<V>>,
+impl<Data> fmt::Display for InMemory<Data>
+where
+    Data: Clone + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", &self.entries)
+    }
 }
-
-impl<V> Default for Log<V> {
+impl<Data> Default for InMemory<Data> {
     fn default() -> Self {
-        Log {
+        InMemory {
             entries: Vec::new(),
         }
     }
 }
-use std::fmt;
-impl<V: Clone + fmt::Debug> Log<V> {
-    /// Create a log from existing entries.
-    ///
-    #[allow(dead_code)]
-    pub(crate) fn from(entries: Vec<Entry<V>>) -> Self {
-        Self { entries }
-    }
 
-    pub(crate) fn len(&self) -> usize {
+impl<Data> Log for InMemory<Data>
+where
+    Data: Clone + fmt::Debug,
+{
+    type Item = Entry<Data>;
+
+    /// Returns the number of entries in the log.
+    fn len(&self) -> usize {
         self.entries.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Return previous log entry index.
-    pub fn previous_index(&self) -> Index {
+    /// Returns previous log entry index.
+    fn previous_index(&self) -> Index {
         if !self.is_empty() {
             Some(self.len() - 1)
         } else {
@@ -59,16 +86,22 @@ impl<V: Clone + fmt::Debug> Log<V> {
         }
     }
 
-    /// Return the term of the previous log entry.
-    pub fn previous_term(&self) -> Term {
+    /// Returns the term of the previous log entry.
+    fn previous_term(&self) -> Term {
         self.entries.iter().last().map(|entry| entry.term)
     }
 
-    pub fn append_entries(
+    /// Returns a slice of log entries.
+    fn get_entries(&self) -> &[Self::Item] {
+        &self.entries
+    }
+
+    /// Appends new entries to the log.
+    fn append_entries(
         &mut self,
         previous_index: Index,
         previous_term: Term,
-        entries: &[Entry<V>],
+        entries: &[Self::Item],
     ) -> anyhow::Result<()> {
         if let Some(index) = previous_index {
             // Check whether the previous index received is the same as the current index in the log.
@@ -118,13 +151,21 @@ impl<V: Clone + fmt::Debug> Log<V> {
     }
 }
 
+impl<V: Clone + fmt::Debug> InMemory<V> {
+    /// Create a log from existing entries.
+    #[allow(dead_code)]
+    pub(crate) fn from(entries: Vec<Entry<V>>) -> Self {
+        Self { entries }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_append_entries() {
-        let mut log = Log::default();
+        let mut log = InMemory::default();
         assert!(
             log.append_entries(None, None, &[Entry::new(1, 'x')])
                 .is_ok(),
@@ -136,7 +177,7 @@ mod tests {
                 .is_ok(),
             "idempotent append entry failed"
         );
-        assert_eq!(log.entries, [Entry::new(1, 'x')]);
+        assert_eq!(log.entries, &[Entry::new(1, 'x')]);
         assert!(log
             .append_entries(Some(0), Some(1), &[Entry::new(1, 'y')])
             .is_ok());
@@ -155,8 +196,8 @@ mod tests {
         );
     }
 
-    fn test_setup_leader_paper_fig7() -> Log<char> {
-        Log::from(vec![
+    fn test_setup_leader_paper_fig7() -> InMemory<char> {
+        InMemory::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
             Entry::new(1, 'c'),
@@ -174,7 +215,7 @@ mod tests {
     #[test]
     fn test_scenario_paper_fig7_a() {
         let leader = test_setup_leader_paper_fig7();
-        let mut follower_a = Log::from(vec![
+        let mut follower_a = InMemory::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
             Entry::new(1, 'c'),
@@ -195,7 +236,7 @@ mod tests {
     #[test]
     fn test_scenario_paper_fig7_b() {
         let leader = test_setup_leader_paper_fig7();
-        let mut follower_b = Log::from(vec![
+        let mut follower_b = InMemory::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
             Entry::new(1, 'c'),
@@ -211,7 +252,7 @@ mod tests {
     #[test]
     fn test_scenario_paper_fig7_c() {
         let leader = test_setup_leader_paper_fig7();
-        let mut follower_c = Log::from(vec![
+        let mut follower_c = InMemory::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
             Entry::new(1, 'c'),
@@ -233,7 +274,7 @@ mod tests {
     #[test]
     fn test_scenario_paper_fig7_d() {
         let leader = test_setup_leader_paper_fig7();
-        let mut follower_d = Log::from(vec![
+        let mut follower_d = InMemory::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
             Entry::new(1, 'c'),
@@ -256,7 +297,7 @@ mod tests {
     #[test]
     fn test_scenario_paper_fig7_e() {
         let leader = test_setup_leader_paper_fig7();
-        let mut follower_e = Log::from(vec![
+        let mut follower_e = InMemory::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
             Entry::new(1, 'c'),
@@ -275,7 +316,7 @@ mod tests {
     #[test]
     fn test_scenario_paper_fig7f() {
         let leader = test_setup_leader_paper_fig7();
-        let mut follower_f = Log::from(vec![
+        let mut follower_f = InMemory::from(vec![
             Entry::new(1, 'a'),
             Entry::new(1, 'b'),
             Entry::new(1, 'c'),

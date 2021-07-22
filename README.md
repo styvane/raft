@@ -17,7 +17,6 @@ I did not implement the following ideas in the paper:
 TODO
 ----
 
-- Add Log trait that defines the Raft log behavior
 - Leader discovery and confirmation
 - Append only *write* operation entry
 - Persist log and non-volatiles states.

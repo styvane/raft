@@ -32,15 +32,15 @@ pub enum Event<T> {
 }
 
 /// The `Request` is a channel for receiving messages send to the Raft leader.
-type Request<V> = channel::Receiver<Box<dyn ClientRequest<EntryKind = V>>>;
+type Request<Data> = channel::Receiver<Box<dyn ClientRequest<EntryKind = Data>>>;
 
 /// Setup the runtime system.
-pub async fn setup<V>(
-    outgoing: channel::Receiver<Message<V>>,
-    requests: Request<V>,
-    raft_server: Server<V>,
+pub async fn setup<Data>(
+    outgoing: channel::Receiver<Message<Data>>,
+    requests: Request<Data>,
+    raft_server: Server<Data>,
 ) where
-    V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let netaddr = raft_server.hostname();
     let (broker_tx, broker_rx) = channel::bounded(MAX_MESSAGES);
@@ -62,9 +62,12 @@ pub async fn setup<V>(
 /// Accept incoming connection from peers in the Raft network
 ///
 /// It also spawns tasks for exchanging messages with peers.
-async fn accept<V>(netaddr: String, broker_sender: channel::Sender<Event<V>>) -> anyhow::Result<()>
+async fn accept<Data>(
+    netaddr: String,
+    broker_sender: channel::Sender<Event<Data>>,
+) -> anyhow::Result<()>
 where
-    V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let listener = TcpListener::bind(netaddr).await?;
     loop {
@@ -79,12 +82,12 @@ where
 }
 
 /// Message broker between Raft peers.
-async fn message_broker<V>(
-    incoming: channel::Receiver<Event<V>>,
-    client_requests: Request<V>,
-    mut server: Server<V>,
+async fn message_broker<Data>(
+    incoming: channel::Receiver<Event<Data>>,
+    client_requests: Request<Data>,
+    mut server: Server<Data>,
 ) where
-    V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let mut incoming = incoming.fuse();
     let mut client_requests = client_requests.fuse();
@@ -106,9 +109,9 @@ async fn message_broker<V>(
 }
 
 /// Receive messages from  a peer and send it to broker.
-async fn recv_message<V>(broker_sender: channel::Sender<Event<V>>, mut reader: TcpStream)
+async fn recv_message<Data>(broker_sender: channel::Sender<Event<Data>>, mut reader: TcpStream)
 where
-    V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let mut stream = &mut reader;
     loop {
@@ -124,9 +127,9 @@ where
 }
 
 /// Start an watch election timer.
-async fn election_timeout<V>(broker_sender: channel::Sender<Event<V>>)
+async fn election_timeout<Data>(broker_sender: channel::Sender<Event<Data>>)
 where
-    V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     loop {
         let mut rng: StdRng = SeedableRng::from_entropy();
@@ -141,9 +144,9 @@ where
 }
 
 /// This function periodically emit heatbeat events.
-async fn emit_heartbeat<V>(broker_sender: channel::Sender<Event<V>>)
+async fn emit_heartbeat<Data>(broker_sender: channel::Sender<Event<Data>>)
 where
-    V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let period = Duration::from_secs(HEARTBEAT);
     loop {
@@ -156,9 +159,9 @@ where
 }
 
 ///  Send the Raft server messages to the appropriate peer.
-async fn send_message<V>(mut outgoing_messages: channel::Receiver<Message<V>>)
+async fn send_message<Data>(mut outgoing_messages: channel::Receiver<Message<Data>>)
 where
-    V: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let mut peers = HashMap::new();
     while let Some(msg) = outgoing_messages.next().await {

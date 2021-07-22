@@ -74,7 +74,7 @@ impl Server {
         let _runtime_handle = task::spawn(runtime::setup::<Command>(
             outgoing,
             requests,
-            server::Server::new(
+            server::Server::new_in_memory(
                 self.options.node_id,
                 self.config.clone(),
                 messages,

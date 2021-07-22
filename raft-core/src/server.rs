@@ -2,11 +2,11 @@
 //!
 //! This module contains the Raft server implementation.
 
-use crate::config::Cluster;
 use crate::event::{AppendEntries, AppendEntriesResponse};
 use crate::event::{Event, Message, RequestVote, RequestVoteResponse, Vote};
 use crate::log::{Entry, Log};
 use crate::types::{Index, Term};
+use crate::{config::Cluster, log::InMemory};
 use async_std::channel::Sender;
 use async_std::task;
 use futures::channel::oneshot;
@@ -36,8 +36,7 @@ pub trait ClientRequest: Send {
 pub type Commit<V> = Option<Sender<V>>;
 
 /// The type `Server` is the raft server.
-#[derive(Debug)]
-pub struct Server<V> {
+pub struct Server<Data> {
     // Server Id
     id: usize,
 
@@ -45,7 +44,7 @@ pub struct Server<V> {
     config: Cluster,
 
     // The log for this server.
-    log: Log<V>,
+    log: Box<dyn Log<Item = Entry<Data>> + Send>,
 
     // The current term for this server.
     current_term: Term,
@@ -79,18 +78,18 @@ pub struct Server<V> {
     has_heard_from_leader: bool,
 
     // Emitted server events and destination.
-    messages: Sender<Message<V>>,
+    messages: Sender<Message<Data>>,
 
     // Waiting entries to be committed.
     waiting: HashMap<usize, oneshot::Sender<bool>>,
 
     // Entries to apply to the state machine by followers.
-    commits: Commit<V>,
+    commits: Commit<Data>,
 }
 
-impl<V> fmt::Display for Server<V>
+impl<Data> fmt::Display for Server<Data>
 where
-    V: Clone + fmt::Debug,
+    Data: Clone + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let commit_index = self
@@ -105,7 +104,7 @@ where
 
         write!(
             f,
-            "Server<id={}, term={:?}, role={},  commit_index={}, vote_for={}, log={:?}>",
+            "Server<id={}, term={:?}, role={},  commit_index={}, vote_for={}, log={}>",
             self.config.get(&self.id).hostname(),
             self.current_term,
             self.role,
@@ -116,22 +115,51 @@ where
     }
 }
 
-impl<V> Server<V>
+impl<Data> Server<Data>
 where
-    V: Clone + fmt::Debug,
+    Data: Clone + fmt::Debug + Send + 'static,
 {
     /// Create new Raft server.
     pub fn new(
         id: usize,
         config: Cluster,
-        messages: Sender<Message<V>>,
-        commits: Commit<V>,
+        messages: Sender<Message<Data>>,
+        log: Box<dyn Log<Item = Entry<Data>> + Send>,
+        commits: Commit<Data>,
     ) -> Self {
         let size = config.size();
         Server {
             id,
             config,
-            log: Log::<V>::default(),
+            log,
+            current_term: None,
+            vote_for: None,
+            commit_index: None,
+            next_index: HashMap::with_capacity(size),
+            match_index: HashMap::with_capacity(size),
+            role: Role::Follower,
+            last_applied: None,
+            votes: HashMap::with_capacity(size),
+            followers_heartbeat: HashSet::with_capacity(size),
+            has_heard_from_leader: false,
+            messages,
+            waiting: HashMap::new(),
+            commits,
+        }
+    }
+
+    /// Create new Raft server.
+    pub fn new_in_memory(
+        id: usize,
+        config: Cluster,
+        messages: Sender<Message<Data>>,
+        commits: Commit<Data>,
+    ) -> Self {
+        let size = config.size();
+        Server {
+            id,
+            config,
+            log: Box::new(InMemory::<Data>::default()),
             current_term: None,
             vote_for: None,
             commit_index: None,
@@ -152,9 +180,9 @@ where
     pub fn with_log(
         id: usize,
         config: Cluster,
-        messages: Sender<Message<V>>,
-        log: Log<V>,
-        commits: Commit<V>,
+        messages: Sender<Message<Data>>,
+        log: Box<dyn Log<Item = Entry<Data>> + Send>,
+        commits: Commit<Data>,
     ) -> Self {
         let next_index: HashMap<String, usize> = config
             .members_iter()
@@ -286,7 +314,7 @@ where
     }
 
     /// Handle client requests.
-    pub fn client_append_entry(&mut self, data: V, response: ConsensusSender) {
+    pub fn client_append_entry(&mut self, data: Data, response: ConsensusSender) {
         if self.role != Role::Leader {
             return;
         }
@@ -335,10 +363,13 @@ where
         let (previous_index, previous_term) = if index == 0 {
             (None, None)
         } else {
-            (Some(index - 1), Some(self.log.entries[index - 1].term))
+            (
+                Some(index - 1),
+                Some(self.log.get_entries()[index - 1].term),
+            )
         };
 
-        let entries = &self.log.entries[index..self.log.len()];
+        let entries = &self.log.get_entries()[index..self.log.len()];
 
         // Set the commit index the minimum value between self commit index
         // and the index of the last log entry.
@@ -359,7 +390,7 @@ where
     }
 
     /// Send the message out.
-    fn send(&mut self, peer: &str, event: Event<V>) {
+    fn send(&mut self, peer: &str, event: Event<Data>) {
         task::block_on(async {
             if let Err(err) = self.messages.send(Message::new(&peer, event)).await {
                 error!("unable to send messages: {:?}", err);
@@ -377,7 +408,7 @@ where
                     task::block_on(async {
                         if let Err(err) = commits
                             .clone()
-                            .send(self.log.entries[index].clone().value)
+                            .send(self.log.get_entries()[index].clone().data)
                             .await
                         {
                             error!("request for applying follower's log failed: {:?}", err);
@@ -395,7 +426,7 @@ where
         }
     }
     /// Handle AppendEntries request from the leader.
-    fn handle_append_entries_request(&mut self, request: AppendEntries<V>) {
+    fn handle_append_entries_request(&mut self, request: AppendEntries<Data>) {
         // The leader should ignore any received AppendEntries RPC call.
         if self.role == Role::Leader {
             return;
@@ -528,7 +559,7 @@ where
     pub fn broadcast_request_vote(&mut self) {
         for peer in self.config.clone().members_iter().map(|x| x.hostname()) {
             if !self.votes.contains_key(peer) {
-                let event: Event<V> = Event::new_request_vote(
+                let event: Event<Data> = Event::new_request_vote(
                     self.current_term,
                     self.log.previous_index(),
                     self.log.previous_term(),
@@ -573,7 +604,7 @@ where
             self.vote_for = Some(source.clone());
         }
 
-        let resp: Event<V> =
+        let resp: Event<Data> =
             Event::new_request_vote_response(self.current_term, vote, &dest, &source);
 
         self.send(&source, resp);
@@ -606,7 +637,7 @@ where
     }
 
     /// Handle all possible normal events in the server.
-    pub fn handle_message(&mut self, event: Event<V>) {
+    pub fn handle_message(&mut self, event: Event<Data>) {
         match event {
             Event::AppendEntries(event) => self.handle_append_entries_request(event),
             Event::AppendEntriesResponse(event) => self.handle_append_entries_response(event),
@@ -647,6 +678,8 @@ impl fmt::Display for Role {
 
 #[cfg(test)]
 mod tests {
+    use crate::log::InMemory;
+
     use super::*;
     use async_std::channel::{bounded, Receiver};
     use config::FileFormat;
@@ -710,7 +743,7 @@ mod tests {
         for (i, log) in setup_logs_scenario_paper_fig7().into_iter().enumerate() {
             let term = log.previous_term();
             let (tx, rx) = bounded(100);
-            let mut srv = Server::with_log(i, config.clone(), tx, log, None);
+            let mut srv = Server::with_log(i, config.clone(), tx, Box::new(log), None);
             srv.current_term = term;
             servers.push(srv);
             receivers.push(rx);
@@ -754,7 +787,7 @@ mod tests {
         let mut messages = Vec::with_capacity(size);
         for i in 0..size {
             let (tx, rx) = bounded(10);
-            let srv = Server::new(i, config.clone(), tx, None);
+            let srv = Server::new(i, config.clone(), tx, Box::new(InMemory::default()), None);
             servers.push(srv);
             messages.push(rx);
         }
@@ -775,8 +808,8 @@ mod tests {
 
         for srv in servers[0..7].iter() {
             assert_eq!(
-                servers[0].log.entries,
-                srv.log.entries,
+                servers[0].log.get_entries(),
+                srv.log.get_entries(),
                 "srv{} log does not match leader",
                 srv.config.get(&srv.id).hostname()
             );
@@ -807,7 +840,7 @@ mod tests {
         )
         .unwrap();
         let (tx, _) = bounded(0);
-        let mut srv: Server<()> = Server::new(0, cfg, tx, None);
+        let mut srv: Server<()> = Server::new(0, cfg, tx, Box::new(InMemory::default()), None);
         assert_eq!(srv.role, Role::Follower);
         srv.become_leader();
     }
@@ -835,7 +868,7 @@ mod tests {
         )
         .unwrap();
         let (tx, _) = bounded(1);
-        let mut srv: Server<()> = Server::new(0, cfg, tx, None);
+        let mut srv: Server<()> = Server::new(0, cfg, tx, Box::new(InMemory::default()), None);
 
         assert_eq!(srv.role, Role::Follower);
         srv.become_candidate();
@@ -869,7 +902,7 @@ mod tests {
         )
         .unwrap();
         let (tx, _) = bounded(1);
-        let mut srv: Server<()> = Server::new(0, cfg, tx, None);
+        let mut srv: Server<()> = Server::new(0, cfg, tx, Box::new(InMemory::default()), None);
         assert_eq!(srv.role, Role::Follower);
         srv.become_candidate();
         assert_eq!(srv.role, Role::Candidate);
@@ -903,7 +936,7 @@ mod tests {
         )
         .unwrap();
         let (tx, _) = bounded(1);
-        let mut srv: Server<()> = Server::new(0, cfg, tx, None);
+        let mut srv: Server<()> = Server::new(0, cfg, tx, Box::new(InMemory::default()), None);
         srv.role = Role::Leader;
         srv.become_candidate();
     }
@@ -948,12 +981,57 @@ mod tests {
 
     #[test]
     fn test_election_paper_fig7() {
-        let (mut servers, mut receivers) = fig7_paper_servers();
-        {
-            let srv0 = &mut servers[0];
-            srv0.log.entries.pop();
-            srv0.become_candidate();
+        let config = Cluster::from_str(
+            r#"
+            systemLog:
+              destination: "console"
+              path: "raft.log"
+              debug: true
+    
+            replication:
+              id: "raft"
+              members:
+              - id: 0
+                host: "0"
+                me: true
+              - id: 1
+                host: "1"
+              - id: 2
+                host: "2"
+              - id: 3
+                host: "3"
+              - id: 4
+                host: "4"
+              - id: 5
+                host: "5"
+              - id: 6
+                host: "6"
+              verbosity:
+                election: true
+                heartbeats: true
+            "#,
+            FileFormat::Yaml,
+        )
+        .unwrap();
+
+        let size = 7;
+        let mut servers = Vec::with_capacity(size);
+
+        let mut receivers = Vec::with_capacity(size);
+        for (i, mut log) in setup_logs_scenario_paper_fig7().into_iter().enumerate() {
+            let term = log.previous_term();
+            let (tx, rx) = bounded(100);
+            if i == 0 {
+                log.entries.remove(log.len() - 1);
+            }
+            let mut srv = Server::with_log(i, config.clone(), tx, Box::new(log), None);
+            srv.current_term = term;
+            servers.push(srv);
+            receivers.push(rx);
         }
+
+        let srv0 = &mut servers[0];
+        srv0.become_candidate();
         process_events(&mut servers, &mut receivers);
 
         assert_eq!(servers[0].votes.get("0").unwrap().granted, true);
@@ -1153,9 +1231,9 @@ mod tests {
         }
     }
 
-    fn setup_logs_scenario_paper_fig7() -> Vec<Log<char>> {
+    fn setup_logs_scenario_paper_fig7() -> Vec<InMemory<char>> {
         vec![
-            Log::from(vec![
+            InMemory::from(vec![
                 Entry::new(1, 'a'),
                 Entry::new(1, 'b'),
                 Entry::new(1, 'c'),
@@ -1168,7 +1246,7 @@ mod tests {
                 Entry::new(6, 'k'),
                 Entry::new(8, 'l'),
             ]),
-            Log::from(vec![
+            InMemory::from(vec![
                 Entry::new(1, 'a'),
                 Entry::new(1, 'b'),
                 Entry::new(1, 'c'),
@@ -1179,13 +1257,13 @@ mod tests {
                 Entry::new(6, 'i'),
                 Entry::new(6, 'j'),
             ]),
-            Log::from(vec![
+            InMemory::from(vec![
                 Entry::new(1, 'a'),
                 Entry::new(1, 'b'),
                 Entry::new(1, 'c'),
                 Entry::new(4, 'd'),
             ]),
-            Log::from(vec![
+            InMemory::from(vec![
                 Entry::new(1, 'a'),
                 Entry::new(1, 'b'),
                 Entry::new(1, 'c'),
@@ -1198,7 +1276,7 @@ mod tests {
                 Entry::new(6, 'k'),
                 Entry::new(6, 'l'),
             ]),
-            Log::from(vec![
+            InMemory::from(vec![
                 Entry::new(1, 'a'),
                 Entry::new(1, 'b'),
                 Entry::new(1, 'c'),
@@ -1212,7 +1290,7 @@ mod tests {
                 Entry::new(7, 'l'),
                 Entry::new(7, 'm'),
             ]),
-            Log::from(vec![
+            InMemory::from(vec![
                 Entry::new(1, 'a'),
                 Entry::new(1, 'b'),
                 Entry::new(1, 'c'),
@@ -1221,7 +1299,7 @@ mod tests {
                 Entry::new(4, 'g'),
                 Entry::new(4, 'h'),
             ]),
-            Log::from(vec![
+            InMemory::from(vec![
                 Entry::new(1, 'a'),
                 Entry::new(1, 'b'),
                 Entry::new(1, 'c'),
