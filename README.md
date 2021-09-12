@@ -23,6 +23,13 @@ TODO
 - Graceful shutdown
 
 
+Installation
+------------
+
+```
+cargo install --bins --path kvserver
+```
+
 Run
 ---
 
@@ -31,16 +38,16 @@ To run this, we need a configuration see [example](config.example.yaml).
 We will then start the following processes. The number of processes depends on the configuration. 
 
 ```
-./target/debug/kvserver --config config.yaml --node-id 0 --port 21000
-./target/debug/kvserver --config config.yaml --node-id 1 --port 22000
-./target/debug/kvserver --config config.yaml --node-id 2 --port 23000
-./target/debug/kvserver --config config.yaml --node-id 3 --port 24000
-./target/debug/kvserver --config config.yaml --node-id 4 --port 25000
+kvserver --config config.yaml --node-id 0 --port 21000
+kvserver --config config.yaml --node-id 1 --port 22000
+kvserver --config config.yaml --node-id 2 --port 23000
+kvserver --config config.yaml --node-id 3 --port 24000
+kvserver --config config.yaml --node-id 4 --port 25000
 ```
 
 Using the client to connect to the leader, then Set/Get/Delete values.
 I did not implement leader discovery, so you will need to watch the log to identifier the leader.
 
 ```
-./target/debug/kvserver-client --port 23000 
+kvserver-client --port 23000 
 ```
