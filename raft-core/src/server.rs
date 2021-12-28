@@ -94,7 +94,6 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let commit_index = self
             .commit_index
-            .clone()
             .map_or_else(|| String::from("None"), |x| x.to_string());
 
         let vote_for = self
@@ -383,7 +382,7 @@ where
             entries.to_vec(),
             commit_index,
             self.config.get(&self.id).hostname(),
-            &peer,
+            peer,
         );
 
         self.send(peer, event);
@@ -392,7 +391,7 @@ where
     /// Send the message out.
     fn send(&mut self, peer: &str, event: Event<Data>) {
         task::block_on(async {
-            if let Err(err) = self.messages.send(Message::new(&peer, event)).await {
+            if let Err(err) = self.messages.send(Message::new(peer, event)).await {
                 error!("unable to send messages: {:?}", err);
             }
         });
@@ -400,10 +399,9 @@ where
 
     /// Send messages for followers to apply pending committed logs.
     fn apply_followers_commits_logs(&mut self) {
-        let mut index = self.commit_index.clone().unwrap();
+        let mut index = self.commit_index.unwrap();
         loop {
-            if self.last_applied.is_none() || index > self.last_applied.clone().unwrap_or_default()
-            {
+            if self.last_applied.is_none() || index > self.last_applied.unwrap_or_default() {
                 if let Some(ref commits) = self.commits {
                     task::block_on(async {
                         if let Err(err) = commits
@@ -482,10 +480,9 @@ where
     /// Send client response.
     fn reply_client(&mut self) {
         // Apply log to the state machine
-        let mut index = self.commit_index.clone().unwrap();
+        let mut index = self.commit_index.unwrap();
         loop {
-            if self.last_applied.is_none() || index > self.last_applied.clone().unwrap_or_default()
-            {
+            if self.last_applied.is_none() || index > self.last_applied.unwrap_or_default() {
                 // Update index of last log applied.
                 if let Some(ch) = self.waiting.remove(&index) {
                     if let Err(err) = ch.send(true) {
@@ -623,15 +620,15 @@ where
             return;
         }
         self.votes.insert(source, vote);
-        let granted: Vec<_> = self
+        let granted = self
             .votes
             .values()
             .map(|x| x.granted)
             .filter(|&x| x)
-            .collect();
+            .count();
 
         // If self has a majory of votes then it becomes a leader.
-        if granted.len() > self.votes.len() / 2 {
+        if granted > self.votes.len() / 2 {
             self.become_leader();
         }
     }
