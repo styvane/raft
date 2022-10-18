@@ -106,14 +106,12 @@ mod tests {
 
                     self.buf.borrow_mut().replace(new_data);
 
-                    return Poll::Ready(Ok(len));
+                    Poll::Ready(Ok(len))
                 }
-                Err(_) => {
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "invalid utf-8 data",
-                    )))
-                }
+                Err(_) => Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "invalid utf-8 data",
+                ))),
             }
         }
 

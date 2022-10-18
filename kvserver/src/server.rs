@@ -99,7 +99,7 @@ impl Server {
 
 /// Read a stream and send the event throught a channel.
 pub async fn read_stream(sender: channel::Sender<Event>, reader: Arc<TcpStream>) {
-    let addr = (&*reader).peer_addr().unwrap().to_string();
+    let addr = reader.peer_addr().unwrap().to_string();
     loop {
         let mut stream = &*reader;
         match recv_frame(&mut stream).await {

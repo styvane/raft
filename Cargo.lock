@@ -1008,6 +1008,7 @@ dependencies = [
  "rand",
  "serde 1.0.145",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]

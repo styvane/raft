@@ -6,7 +6,7 @@ use std::path::Path;
 use std::slice::Iter;
 
 /// Cluster member configuration.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Member {
     id: usize,
     host: String,
@@ -16,7 +16,7 @@ pub struct Member {
 }
 
 /// Verbosity configuration.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Verbosity {
     #[serde(default)]
     pub election: bool,
@@ -26,7 +26,7 @@ pub struct Verbosity {
 }
 
 /// Replication configuration.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Replication {
     id: String,
     members: Vec<Member>,
@@ -34,7 +34,7 @@ pub struct Replication {
 }
 
 /// System log configuration.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct SystemLog {
     #[serde(default)]
     destination: String,
@@ -47,7 +47,7 @@ pub struct SystemLog {
 }
 
 /// Cluster configuration.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct Cluster {
     #[serde(rename(deserialize = "systemLog"))]
     pub system_log: SystemLog,
@@ -135,7 +135,7 @@ mod tests {
               destination: "console"
               path: ""
               debug: true
-    
+
             replication:
               id: "raft"
               members:

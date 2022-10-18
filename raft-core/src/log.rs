@@ -1,9 +1,12 @@
 //! Raft log.
 
-use crate::types::{Index, Term};
-use anyhow::{self, bail};
-use serde::{Deserialize, Serialize};
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+use crate::result::Result;
+use crate::types::{Index, Term};
+use crate::Error;
 
 /// Entry owns the data for the log entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
@@ -33,7 +36,7 @@ pub trait Log: fmt::Display {
         previous_index: Index,
         previous_term: Term,
         entries: &[Self::Item],
-    ) -> anyhow::Result<()>;
+    ) -> Result<()>;
 }
 
 /// The `InMemoryLog` type stores all the Raft server's logs in memory.
@@ -102,19 +105,19 @@ where
         previous_index: Index,
         previous_term: Term,
         entries: &[Self::Item],
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         if let Some(index) = previous_index {
             // Check whether the previous index received is the same as the current index in the log.
             // because the log is never allowed to have holes.
             if !self.is_empty() && index > self.len() - 1 {
-                bail!("log is never allowed to have holes");
+                return Err(Error::LogError("log is never allowed to have holes".into()));
             }
 
             if let Some(term) = previous_term {
                 // Check whether the previous term received is the same as the current term of the last
                 // log entries.
                 if self.entries[index].term != term {
-                    bail!("mismatch previous term");
+                    return Err(Error::LogError("mismatch previous term".into()));
                 }
             }
         }
@@ -307,9 +310,9 @@ mod tests {
             Entry::new(4, 'h'),
         ]);
 
-        assert!(!follower_e
+        assert!(follower_e
             .append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..])
-            .is_ok());
+            .is_err());
         assert_ne!(follower_e.entries, leader.entries);
     }
 
@@ -330,9 +333,9 @@ mod tests {
             Entry::new(3, 'l'),
         ]);
 
-        assert!(!follower_f
+        assert!(follower_f
             .append_entries(Some(9), Some(6), &leader.entries[leader.len() - 1..])
-            .is_ok());
+            .is_err());
         assert_ne!(follower_f.entries, leader.entries);
     }
 }

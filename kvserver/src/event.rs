@@ -63,7 +63,7 @@ impl Event {
                 msg = events.next().fuse()  => if let Some(event) = msg {
                     match event {
                         Event::Connection { stream } => {
-                            if let Ok(addr) = (&*stream).peer_addr() {
+                            if let Ok(addr) = stream.peer_addr() {
                                 if let Entry::Vacant(entry) = connections.entry(addr.to_string()) {
                                     let (sender, resp) = channel::bounded(100);
                                     entry.insert(sender);

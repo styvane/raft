@@ -706,7 +706,7 @@ mod tests {
               destination: "console"
               path: "raft.log"
               debug: true
-    
+
             replication:
               id: "raft"
               members:
@@ -746,7 +746,7 @@ mod tests {
             receivers.push(rx);
         }
 
-        return (servers, receivers);
+        (servers, receivers)
     }
 
     fn new_servers() -> (Vec<Server<char>>, Vec<Receiver<Message<char>>>) {
@@ -759,7 +759,7 @@ mod tests {
               destination: "console"
               path: "raft.log"
               debug: true
-    
+
             replication:
               id: "raft"
               members:
@@ -789,19 +789,19 @@ mod tests {
             messages.push(rx);
         }
 
-        return (servers, messages);
+        (servers, messages)
     }
 
     #[test]
     fn test_log_replication_scenario_paper_fig7() {
-        let (mut servers, mut receivers) = fig7_paper_servers();
+        let (mut servers, receivers) = fig7_paper_servers();
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
             srv0.client_append_entry('m', None);
         }
 
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
 
         for srv in servers[0..7].iter() {
             assert_eq!(
@@ -822,7 +822,7 @@ mod tests {
               destination: "console"
               path: "raft.log"
               debug: true
-    
+
             replication:
               id: "raft"
               members:
@@ -850,7 +850,7 @@ mod tests {
               destination: "console"
               path: "raft.log"
               debug: true
-    
+
             replication:
               id: "raft"
               members:
@@ -884,7 +884,7 @@ mod tests {
               destination: "console"
               path: "raft.log"
               debug: true
-    
+
             replication:
               id: "raft"
               members:
@@ -918,7 +918,7 @@ mod tests {
               destination: "console"
               path: "raft.log"
               debug: true
-    
+
             replication:
               id: "raft"
               members:
@@ -940,21 +940,21 @@ mod tests {
 
     #[test]
     fn test_consensus_log_replication_paper_fig7() {
-        let (mut servers, mut receivers) = fig7_paper_servers();
+        let (mut servers, receivers) = fig7_paper_servers();
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
             srv0.client_append_entry('m', None);
         }
 
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
 
         {
             let srv0 = &mut servers[0];
             srv0.client_append_entry('n', None);
         }
 
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
 
         assert_eq!(servers[0].last_applied, Some(11));
 
@@ -963,7 +963,7 @@ mod tests {
             srv0.client_append_entry('o', None);
         }
 
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
         assert_eq!(servers[0].last_applied, Some(12));
         for srv in servers[1..7].iter() {
             assert_eq!(
@@ -984,7 +984,7 @@ mod tests {
               destination: "console"
               path: "raft.log"
               debug: true
-    
+
             replication:
               id: "raft"
               members:
@@ -1029,33 +1029,33 @@ mod tests {
 
         let srv0 = &mut servers[0];
         srv0.become_candidate();
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
 
-        assert_eq!(servers[0].votes.get("0").unwrap().granted, true);
-        assert_eq!(servers[0].votes.get("1").unwrap().granted, true);
-        assert_eq!(servers[0].votes.get("2").unwrap().granted, true);
-        assert_eq!(servers[0].votes.get("3").unwrap().granted, false);
-        assert_eq!(servers[0].votes.get("4").unwrap().granted, false);
-        assert_eq!(servers[0].votes.get("5").unwrap().granted, true);
-        assert_eq!(servers[0].votes.get("6").unwrap().granted, true);
+        assert!(servers[0].votes.get("0").unwrap().granted);
+        assert!(servers[0].votes.get("1").unwrap().granted);
+        assert!(servers[0].votes.get("2").unwrap().granted);
+        assert!(!servers[0].votes.get("3").unwrap().granted);
+        assert!(!servers[0].votes.get("4").unwrap().granted);
+        assert!(servers[0].votes.get("5").unwrap().granted);
+        assert!(servers[0].votes.get("6").unwrap().granted);
     }
 
     #[test]
     fn test_server2_cannot_become_leader_paper_fig7() {
-        let (mut servers, mut receivers) = fig7_paper_servers();
+        let (mut servers, receivers) = fig7_paper_servers();
         {
             let srv2 = &mut servers[2];
             srv2.become_candidate();
         }
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
 
-        assert_eq!(servers[2].votes.get("0").unwrap().granted, false);
-        assert_eq!(servers[2].votes.get("1").unwrap().granted, false);
-        assert_eq!(servers[2].votes.get("2").unwrap().granted, true);
-        assert_eq!(servers[2].votes.get("3").unwrap().granted, false);
-        assert_eq!(servers[2].votes.get("4").unwrap().granted, false);
-        assert_eq!(servers[2].votes.get("5").unwrap().granted, false);
-        assert_eq!(servers[2].votes.get("6").unwrap().granted, true);
+        assert!(!servers[2].votes.get("0").unwrap().granted);
+        assert!(!servers[2].votes.get("1").unwrap().granted);
+        assert!(servers[2].votes.get("2").unwrap().granted);
+        assert!(!servers[2].votes.get("3").unwrap().granted);
+        assert!(!servers[2].votes.get("4").unwrap().granted);
+        assert!(!servers[2].votes.get("5").unwrap().granted);
+        assert!(servers[2].votes.get("6").unwrap().granted,);
 
         assert_eq!(
             servers[2].role,
@@ -1066,7 +1066,7 @@ mod tests {
 
     #[test]
     fn test_heartbeat_paper_fig7() {
-        let (mut servers, mut receivers) = fig7_paper_servers();
+        let (mut servers, receivers) = fig7_paper_servers();
         for srv in servers[..].iter() {
             assert!(!srv.has_heard_from_leader);
         }
@@ -1078,7 +1078,7 @@ mod tests {
             srv0.election_timeout();
         }
 
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
 
         for srv in servers[1..].iter() {
             assert!(srv.has_heard_from_leader);
@@ -1090,7 +1090,7 @@ mod tests {
 
     #[test]
     fn test_election_timeout_paper_fig7() {
-        let (mut servers, mut receivers) = fig7_paper_servers();
+        let (mut servers, receivers) = fig7_paper_servers();
         for srv in servers[..].iter() {
             assert!(!srv.has_heard_from_leader);
         }
@@ -1127,14 +1127,14 @@ mod tests {
         assert_eq!(servers[2].role, Role::Candidate);
         assert_eq!(servers[2].current_term, Some(6));
 
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
         assert_eq!(servers[0].role, Role::Leader);
         assert_eq!(servers[2].role, Role::Follower);
     }
 
     #[test]
     fn test_received_heartbeat_during_election_paper_fig7() {
-        let (mut servers, mut receivers) = fig7_paper_servers();
+        let (mut servers, receivers) = fig7_paper_servers();
         for srv in servers[..].iter() {
             assert!(!srv.has_heard_from_leader);
         }
@@ -1160,20 +1160,20 @@ mod tests {
             srv0.client_append_entry('m', None);
         }
 
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
         assert_eq!(servers[0].role, Role::Leader);
         assert_eq!(servers[2].role, Role::Follower);
     }
 
     #[test]
     fn test_new_servers() {
-        let (mut servers, mut receivers) = new_servers();
+        let (mut servers, receivers) = new_servers();
         {
             let srv0 = &mut servers[0];
             srv0.become_candidate();
         }
 
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
 
         assert_eq!(servers[0].role, Role::Leader);
         for srv in servers[1..5].iter() {
@@ -1199,7 +1199,7 @@ mod tests {
             let srv0 = &mut servers[0];
             srv0.client_append_entry('a', None);
         }
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
         assert_eq!(servers[0].last_applied, Some(0));
         for srv in servers[1..5].iter() {
             assert_eq!(
@@ -1215,7 +1215,7 @@ mod tests {
             let srv0 = &mut servers[0];
             srv0.client_append_entry('b', None);
         }
-        process_events(&mut servers, &mut receivers);
+        process_events(&mut servers, &receivers);
         assert_eq!(servers[0].last_applied, Some(1));
         for srv in servers[1..5].iter() {
             assert_eq!(
