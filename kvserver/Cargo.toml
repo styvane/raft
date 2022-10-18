@@ -2,7 +2,7 @@
 name = "kvserver"
 version = "0.1.0"
 authors = ["Styvane Soukossi <styvane@acm.org>"]
-edition = "2018"
+edition = "2021"
 
 
 [[bin]]
@@ -12,12 +12,12 @@ path = "bin/client.rs"
 
 [dependencies]
 structopt = "0.3"
-serde_json = "1.0"
+serde_json = { workspace = true }
 rustyline = "8.0.0"
-anyhow = "1.0"
-serde =  { version = "1.0", features = ["derive"] }
-futures = "0.3"
-async-std = { version = "1.9", features = ["attributes"] }
+anyhow = { workspace = true }
+serde =  { workspace = true }
+futures = { workspace = true }
+async-std = { workspace = true }
 log = "0.4.0"
 log4rs = "1.0.0"
 

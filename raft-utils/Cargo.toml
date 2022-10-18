@@ -2,9 +2,10 @@
 name = "raft-utils"
 version = "0.1.0"
 authors = ["Styvane Soukossi <styvane@acm.org>"]
-edition = "2018"
+edition = "2021"
+rust-version = "1.64"
 
 
 [dependencies]
-anyhow = "1.0"
-async-std = { version = "1.9", features = ["attributes"] }
+anyhow = { workspace = true }
+async-std = { workspace = true }
