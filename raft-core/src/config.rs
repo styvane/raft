@@ -1,9 +1,12 @@
 //! Raft cluster configuration
 
-use config::{Config as Configure, File, FileFormat};
-use serde::Deserialize;
 use std::path::Path;
 use std::slice::Iter;
+
+use config::{Config as Configure, File, FileFormat};
+use serde::Deserialize;
+
+use crate::result::Result;
 
 /// Cluster member configuration.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
@@ -56,7 +59,7 @@ pub struct Cluster {
 
 impl Cluster {
     /// Create a cluster configuration from a string.
-    pub fn from_str(data: &str, format: FileFormat) -> anyhow::Result<Self> {
+    pub fn from_str(data: &str, format: FileFormat) -> Result<Self> {
         let mut cfg = Configure::new();
         cfg.merge(File::from_str(data, format))?;
         let cfg = cfg.try_into::<Self>()?;
@@ -64,7 +67,7 @@ impl Cluster {
     }
 
     /// Create a cluster configuration from a path.
-    pub fn from_path<P>(path: P) -> anyhow::Result<Self>
+    pub fn from_path<P>(path: P) -> Result<Self>
     where
         P: AsRef<Path>,
     {

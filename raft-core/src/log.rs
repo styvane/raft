@@ -1,4 +1,4 @@
-//! Raft log.
+//! Raft log type.
 
 use std::fmt;
 
@@ -10,16 +10,16 @@ use crate::Error;
 
 /// Entry owns the data for the log entry.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-pub struct Entry<Data> {
+pub struct Entry<T> {
     pub term: usize,
-    pub data: Data,
+    pub data: T,
 }
 
 /// A set of log entries.
-pub type Entries<Data> = Vec<Entry<Data>>;
+pub type Entries<T> = Vec<Entry<T>>;
 
-impl<Data> Entry<Data> {
-    pub const fn new(term: usize, data: Data) -> Self {
+impl<T> Entry<T> {
+    pub const fn new(term: usize, data: T) -> Self {
         Entry { term, data }
     }
 }
@@ -41,27 +41,26 @@ pub trait Log: fmt::Display {
 
 /// The `InMemoryLog` type stores all the Raft server's logs in memory.
 #[derive(Debug)]
-pub struct InMemory<Data> {
-    pub(crate) entries: Vec<Entry<Data>>,
+pub struct InMemory<T> {
+    pub(crate) entries: Vec<Entry<T>>,
 }
 
-impl<Data> InMemory<Data> {
-    /// Returns the number of elements in the log.
-    /// Returns true if log has length 0.
+impl<T> InMemory<T> {
+    /// Returns true if the log contains no entry.
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }
 
-impl<Data> fmt::Display for InMemory<Data>
+impl<T> fmt::Display for InMemory<T>
 where
-    Data: Clone + fmt::Debug,
+    T: Clone + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", &self.entries)
     }
 }
-impl<Data> Default for InMemory<Data> {
+impl<T> Default for InMemory<T> {
     fn default() -> Self {
         InMemory {
             entries: Vec::new(),
@@ -69,11 +68,11 @@ impl<Data> Default for InMemory<Data> {
     }
 }
 
-impl<Data> Log for InMemory<Data>
+impl<T> Log for InMemory<T>
 where
-    Data: Clone + fmt::Debug,
+    T: Clone + fmt::Debug,
 {
-    type Item = Entry<Data>;
+    type Item = Entry<T>;
 
     /// Returns the number of entries in the log.
     fn len(&self) -> usize {
@@ -154,9 +153,9 @@ where
     }
 }
 
+#[cfg(test)]
 impl<V: Clone + fmt::Debug> InMemory<V> {
     /// Create a log from existing entries.
-    #[allow(dead_code)]
     pub(crate) fn from(entries: Vec<Entry<V>>) -> Self {
         Self { entries }
     }

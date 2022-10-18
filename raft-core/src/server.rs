@@ -36,7 +36,7 @@ pub trait ClientRequest: Send {
 pub type Commit<V> = Option<Sender<V>>;
 
 /// The type `Server` is the raft server.
-pub struct Server<Data> {
+pub struct Server<T> {
     // Server Id
     id: usize,
 
@@ -44,7 +44,7 @@ pub struct Server<Data> {
     config: Cluster,
 
     // The log for this server.
-    log: Box<dyn Log<Item = Entry<Data>> + Send>,
+    log: Box<dyn Log<Item = Entry<T>> + Send>,
 
     // The current term for this server.
     current_term: Term,
@@ -78,18 +78,18 @@ pub struct Server<Data> {
     has_heard_from_leader: bool,
 
     // Emitted server events and destination.
-    messages: Sender<Message<Data>>,
+    messages: Sender<Message<T>>,
 
     // Waiting entries to be committed.
     waiting: HashMap<usize, oneshot::Sender<bool>>,
 
     // Entries to apply to the state machine by followers.
-    commits: Commit<Data>,
+    commits: Commit<T>,
 }
 
-impl<Data> fmt::Display for Server<Data>
+impl<T> fmt::Display for Server<T>
 where
-    Data: Clone + fmt::Debug,
+    T: Clone + fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let commit_index = self
@@ -114,17 +114,17 @@ where
     }
 }
 
-impl<Data> Server<Data>
+impl<T> Server<T>
 where
-    Data: Clone + fmt::Debug + Send + 'static,
+    T: Clone + fmt::Debug + Send + 'static,
 {
     /// Create new Raft server.
     pub fn new(
         id: usize,
         config: Cluster,
-        messages: Sender<Message<Data>>,
-        log: Box<dyn Log<Item = Entry<Data>> + Send>,
-        commits: Commit<Data>,
+        messages: Sender<Message<T>>,
+        log: Box<dyn Log<Item = Entry<T>> + Send>,
+        commits: Commit<T>,
     ) -> Self {
         let size = config.size();
         Server {
@@ -151,14 +151,14 @@ where
     pub fn new_in_memory(
         id: usize,
         config: Cluster,
-        messages: Sender<Message<Data>>,
-        commits: Commit<Data>,
+        messages: Sender<Message<T>>,
+        commits: Commit<T>,
     ) -> Self {
         let size = config.size();
         Server {
             id,
             config,
-            log: Box::new(InMemory::<Data>::default()),
+            log: Box::new(InMemory::<T>::default()),
             current_term: None,
             vote_for: None,
             commit_index: None,
@@ -179,9 +179,9 @@ where
     pub fn with_log(
         id: usize,
         config: Cluster,
-        messages: Sender<Message<Data>>,
-        log: Box<dyn Log<Item = Entry<Data>> + Send>,
-        commits: Commit<Data>,
+        messages: Sender<Message<T>>,
+        log: Box<dyn Log<Item = Entry<T>> + Send>,
+        commits: Commit<T>,
     ) -> Self {
         let next_index: HashMap<String, usize> = config
             .members_iter()
@@ -313,7 +313,7 @@ where
     }
 
     /// Handle client requests.
-    pub fn client_append_entry(&mut self, data: Data, response: ConsensusSender) {
+    pub fn client_append_entry(&mut self, data: T, response: ConsensusSender) {
         if self.role != Role::Leader {
             return;
         }
@@ -389,7 +389,7 @@ where
     }
 
     /// Send the message out.
-    fn send(&mut self, peer: &str, event: Event<Data>) {
+    fn send(&mut self, peer: &str, event: Event<T>) {
         task::block_on(async {
             if let Err(err) = self.messages.send(Message::new(peer, event)).await {
                 error!("unable to send messages: {:?}", err);
@@ -424,7 +424,7 @@ where
         }
     }
     /// Handle AppendEntries request from the leader.
-    fn handle_append_entries_request(&mut self, request: AppendEntries<Data>) {
+    fn handle_append_entries_request(&mut self, request: AppendEntries<T>) {
         // The leader should ignore any received AppendEntries RPC call.
         if self.role == Role::Leader {
             return;
@@ -556,7 +556,7 @@ where
     pub fn broadcast_request_vote(&mut self) {
         for peer in self.config.clone().members_iter().map(|x| x.hostname()) {
             if !self.votes.contains_key(peer) {
-                let event: Event<Data> = Event::new_request_vote(
+                let event: Event<T> = Event::new_request_vote(
                     self.current_term,
                     self.log.previous_index(),
                     self.log.previous_term(),
@@ -601,7 +601,7 @@ where
             self.vote_for = Some(source.clone());
         }
 
-        let resp: Event<Data> =
+        let resp: Event<T> =
             Event::new_request_vote_response(self.current_term, vote, &dest, &source);
 
         self.send(&source, resp);
@@ -634,7 +634,7 @@ where
     }
 
     /// Handle all possible normal events in the server.
-    pub fn handle_message(&mut self, event: Event<Data>) {
+    pub fn handle_message(&mut self, event: Event<T>) {
         match event {
             Event::AppendEntries(event) => self.handle_append_entries_request(event),
             Event::AppendEntriesResponse(event) => self.handle_append_entries_response(event),

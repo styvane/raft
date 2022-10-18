@@ -1,8 +1,9 @@
 //! Runtime of the Raft server.
 
-use crate::event::Message;
-use crate::server::ClientRequest;
-use crate::server::Server;
+use std::collections::hash_map::{Entry, HashMap};
+use std::fmt;
+use std::time::Duration;
+
 use async_std::channel;
 use async_std::net::{TcpListener, TcpStream};
 use async_std::stream::StreamExt;
@@ -15,9 +16,11 @@ use rand::Rng;
 use rand::SeedableRng;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use std::collections::hash_map::{Entry, HashMap};
-use std::fmt;
-use std::time::Duration;
+
+use crate::event::Message;
+use crate::result::Result;
+use crate::server::ClientRequest;
+use crate::server::Server;
 
 const ELECTION_TIMEOUT_MIN: u64 = 9;
 const ELECTION_TIMEOUT_MAX: u64 = 15;
@@ -32,15 +35,15 @@ pub enum Event<T> {
 }
 
 /// The `Request` is a channel for receiving messages send to the Raft leader.
-type Request<Data> = channel::Receiver<Box<dyn ClientRequest<EntryKind = Data>>>;
+type Request<T> = channel::Receiver<Box<dyn ClientRequest<EntryKind = T>>>;
 
 /// Setup the runtime system.
-pub async fn setup<Data>(
-    outgoing: channel::Receiver<Message<Data>>,
-    requests: Request<Data>,
-    raft_server: Server<Data>,
+pub async fn setup<T>(
+    outgoing: channel::Receiver<Message<T>>,
+    requests: Request<T>,
+    raft_server: Server<T>,
 ) where
-    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    T: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let netaddr = raft_server.hostname();
     let (broker_tx, broker_rx) = channel::bounded(MAX_MESSAGES);
@@ -62,12 +65,9 @@ pub async fn setup<Data>(
 /// Accept incoming connection from peers in the Raft network
 ///
 /// It also spawns tasks for exchanging messages with peers.
-async fn accept<Data>(
-    netaddr: String,
-    broker_sender: channel::Sender<Event<Data>>,
-) -> anyhow::Result<()>
+async fn accept<T>(netaddr: String, broker_sender: channel::Sender<Event<T>>) -> Result<()>
 where
-    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    T: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let listener = TcpListener::bind(netaddr).await?;
     loop {
@@ -82,12 +82,12 @@ where
 }
 
 /// Message broker between Raft peers.
-async fn message_broker<Data>(
-    incoming: channel::Receiver<Event<Data>>,
-    client_requests: Request<Data>,
-    mut server: Server<Data>,
+async fn message_broker<T>(
+    incoming: channel::Receiver<Event<T>>,
+    client_requests: Request<T>,
+    mut server: Server<T>,
 ) where
-    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    T: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let mut incoming = incoming.fuse();
     let mut client_requests = client_requests.fuse();
@@ -109,9 +109,9 @@ async fn message_broker<Data>(
 }
 
 /// Receive messages from  a peer and send it to broker.
-async fn recv_message<Data>(broker_sender: channel::Sender<Event<Data>>, mut reader: TcpStream)
+async fn recv_message<T>(broker_sender: channel::Sender<Event<T>>, mut reader: TcpStream)
 where
-    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    T: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let mut stream = &mut reader;
     loop {
@@ -127,9 +127,9 @@ where
 }
 
 /// Start an watch election timer.
-async fn election_timeout<Data>(broker_sender: channel::Sender<Event<Data>>)
+async fn election_timeout<T>(broker_sender: channel::Sender<Event<T>>)
 where
-    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    T: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     loop {
         let mut rng: StdRng = SeedableRng::from_entropy();
@@ -144,9 +144,9 @@ where
 }
 
 /// This function periodically emit heatbeat events.
-async fn emit_heartbeat<Data>(broker_sender: channel::Sender<Event<Data>>)
+async fn emit_heartbeat<T>(broker_sender: channel::Sender<Event<T>>)
 where
-    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    T: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let period = Duration::from_secs(HEARTBEAT);
     loop {
@@ -159,9 +159,9 @@ where
 }
 
 ///  Send the Raft server messages to the appropriate peer.
-async fn send_message<Data>(mut outgoing_messages: channel::Receiver<Message<Data>>)
+async fn send_message<T>(mut outgoing_messages: channel::Receiver<Message<T>>)
 where
-    Data: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
+    T: Clone + fmt::Debug + Send + 'static + DeserializeOwned + Serialize,
 {
     let mut peers = HashMap::new();
     while let Some(msg) = outgoing_messages.next().await {
