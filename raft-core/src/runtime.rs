@@ -97,7 +97,11 @@ async fn message_broker<T>(
                 match event  {
                     Event::Election => server.election_timeout(),
                     Event::HeartBeat => server.send_leader_heartbeat(),
-                    Event::Message(msg) => server.handle_message(msg.event),
+                    Event::Message(msg) => {
+                        if let Err(error) = server.handle_message(msg.event) {
+                            error!("{}", error)
+                        }
+                    }
                 };
             },
             req = client_requests.next().fuse() => if let Some(mut msg) = req {

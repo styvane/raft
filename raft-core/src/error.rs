@@ -17,4 +17,12 @@ pub enum Error {
     /// IO error
     #[error(transparent)]
     IOError(#[from] std::io::Error),
+
+    /// Error while sending a message
+    #[error("{0}")]
+    SendError(String),
+
+    /// Error while sending a message
+    #[error("{0}")]
+    PeerError(String),
 }

@@ -2,18 +2,22 @@
 //!
 //! This module contains the Raft server implementation.
 
-use crate::event::{AppendEntries, AppendEntriesResponse};
-use crate::event::{Event, Message, RequestVote, RequestVoteResponse, Vote};
-use crate::log::{Entry, Log};
-use crate::types::{Index, Term};
-use crate::{config::Cluster, log::InMemory};
+use std::cmp;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
+
 use async_std::channel::Sender;
 use async_std::task;
 use futures::channel::oneshot;
 use log::{error, info};
-use std::cmp;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
+
+use crate::event::{AppendEntries, AppendEntriesResponse};
+use crate::event::{Event, Message, RequestVote, RequestVoteResponse, Vote};
+use crate::log::{Entry, Log};
+use crate::result::Result;
+use crate::types::{Index, Term};
+use crate::Error;
+use crate::{config::Cluster, log::InMemory};
 
 /// Optional channel for sending messages to client when there is consensus.
 pub type ConsensusSender = Option<oneshot::Sender<bool>>;
@@ -223,15 +227,14 @@ where
             true
         } else {
             self.followers_heartbeat.clear();
-            self.become_follower();
-            false
+            self.become_follower()
         }
     }
 
     /// Reset some internal state after winning an election.
-    pub fn become_leader(&mut self) {
+    pub fn become_leader(&mut self) -> Result<()> {
         if self.role == Role::Leader {
-            return;
+            return Ok(());
         }
 
         // See TLA⁺ spec L229.
@@ -251,15 +254,12 @@ where
 
         // Once elected, the self must commit a new entry to it log.
         // It also needs to send send appendEntries to followers.
-        if self
-            .log
+        self.log
             .append_entries(self.log.previous_index(), self.log.previous_term(), &[])
-            .is_ok()
-        {
-            self.broadcast_append_entries();
-        }
-
+            .map_err(|e| Error::LogError(format!("failed to commit new log entry: {}", e)))?;
+        self.broadcast_append_entries();
         info!("{}", self);
+        Ok(())
     }
 
     /// This method change the server's role to [`Role::Candidate`].
@@ -308,8 +308,9 @@ where
     }
 
     /// This method changes the role to `Role::Follower.
-    fn become_follower(&mut self) {
+    fn become_follower(&mut self) -> bool {
         self.role = Role::Follower;
+        false
     }
 
     /// Handle client requests.
@@ -345,16 +346,18 @@ where
     /// Send AppendEntries RPC to all peers.
     fn broadcast_append_entries(&mut self) {
         for peer in self.config.clone().members_iter().map(|x| x.hostname()) {
-            self.send_append_entries(peer);
+            if let Err(error) = self.send_append_entries(peer) {
+                error!("{}", error);
+            }
         }
     }
 
-    /// Send AppendEntries RPC a follower.
-    fn send_append_entries(&mut self, peer: &str) {
+    /// Send AppendEntries RPC to a follower.
+    fn send_append_entries(&mut self, peer: &str) -> Result<()> {
         // Get the previous log entry for this peer.
 
         if !self.next_index.contains_key(peer) {
-            return;
+            return Err(Error::PeerError(format!("unknown peer: {}", peer)));
         }
         let index = self.next_index[peer];
 
@@ -385,16 +388,17 @@ where
             peer,
         );
 
-        self.send(peer, event);
+        self.send(peer, event)
     }
 
     /// Send the message out.
-    fn send(&mut self, peer: &str, event: Event<T>) {
+    fn send(&mut self, peer: &str, event: Event<T>) -> Result<()> {
         task::block_on(async {
-            if let Err(err) = self.messages.send(Message::new(peer, event)).await {
-                error!("unable to send messages: {:?}", err);
-            }
-        });
+            self.messages
+                .send(Message::new(peer, event))
+                .await
+                .map_err(|err| Error::SendError(format!("unable to send message: {:?}", err)))
+        })
     }
 
     /// Send messages for followers to apply pending committed logs.
@@ -424,10 +428,10 @@ where
         }
     }
     /// Handle AppendEntries request from the leader.
-    fn handle_append_entries_request(&mut self, request: AppendEntries<T>) {
+    fn handle_append_entries_request(&mut self, request: AppendEntries<T>) -> Result<()> {
         // The leader should ignore any received AppendEntries RPC call.
         if self.role == Role::Leader {
-            return;
+            return Ok(());
         }
 
         let AppendEntries {
@@ -474,7 +478,7 @@ where
             &source,
         );
         info!("{}", self);
-        self.send(&source, resp);
+        self.send(&source, resp)
     }
 
     /// Send client response.
@@ -500,7 +504,7 @@ where
     }
 
     /// Handle AppendEntries RPC response from a server.
-    fn handle_append_entries_response(&mut self, response: AppendEntriesResponse) {
+    fn handle_append_entries_response(&mut self, response: AppendEntriesResponse) -> Result<()> {
         let AppendEntriesResponse {
             source,
             success,
@@ -538,6 +542,7 @@ where
                 // Update last applied index.
                 self.last_applied = self.commit_index;
             }
+            Ok(())
         } else {
             // Decrement the next log index for this peer when the AppendEntries
             // consistency check failed.
@@ -548,7 +553,7 @@ where
                 }
             });
             // Retry the RPC for this peer.
-            self.send_append_entries(&source);
+            self.send_append_entries(&source)
         }
     }
 
@@ -564,13 +569,15 @@ where
                     peer,
                 );
 
-                self.send(peer, event);
+                if let Err(error) = self.send(peer, event) {
+                    error!("{}", error)
+                }
             }
         }
     }
 
     /// Handle a request vote from a candidate.
-    pub fn handle_request_vote(&mut self, request: RequestVote) {
+    pub fn handle_request_vote(&mut self, request: RequestVote) -> Result<()> {
         let RequestVote {
             term,
             last_index,
@@ -604,11 +611,11 @@ where
         let resp: Event<T> =
             Event::new_request_vote_response(self.current_term, vote, &dest, &source);
 
-        self.send(&source, resp);
+        self.send(&source, resp)
     }
 
     /// Handle a request vote response from a peer.
-    pub fn handle_request_vote_response(&mut self, response: RequestVoteResponse) {
+    pub fn handle_request_vote_response(&mut self, response: RequestVoteResponse) -> Result<()> {
         let RequestVoteResponse {
             term, vote, source, ..
         } = response;
@@ -617,7 +624,7 @@ where
 
         // Ignore the response if its from a leader.
         if term > self.current_term {
-            return;
+            return Ok(());
         }
         self.votes.insert(source, vote);
         let granted = self
@@ -629,18 +636,20 @@ where
 
         // If self has a majory of votes then it becomes a leader.
         if granted > self.votes.len() / 2 {
-            self.become_leader();
+            return self.become_leader();
         }
+
+        Ok(())
     }
 
     /// Handle all possible normal events in the server.
-    pub fn handle_message(&mut self, event: Event<T>) {
+    pub fn handle_message(&mut self, event: Event<T>) -> Result<()> {
         match event {
             Event::AppendEntries(event) => self.handle_append_entries_request(event),
             Event::AppendEntriesResponse(event) => self.handle_append_entries_response(event),
             Event::RequestVote(event) => self.handle_request_vote(event),
             Event::RequestVoteResponse(event) => self.handle_request_vote_response(event),
-        };
+        }
     }
 
     fn update_term(&mut self, new_term: Term) {
@@ -685,11 +694,14 @@ mod tests {
         loop {
             for receiver in messages {
                 while let Ok(Message { dest, event }) = receiver.try_recv() {
-                    servers
+                    if let Err(error) = servers
                         .iter_mut()
                         .find(|srv| srv.config.get(&srv.id).hostname() == dest)
                         .unwrap()
-                        .handle_message(event);
+                        .handle_message(event)
+                    {
+                        error!("{}", error);
+                    }
                 }
             }
 
@@ -839,7 +851,7 @@ mod tests {
         let (tx, _) = bounded(0);
         let mut srv: Server<()> = Server::new(0, cfg, tx, Box::new(InMemory::default()), None);
         assert_eq!(srv.role, Role::Follower);
-        srv.become_leader();
+        srv.become_leader().expect("failed to become leader");
     }
 
     #[test]
@@ -904,7 +916,7 @@ mod tests {
         srv.become_candidate();
         assert_eq!(srv.role, Role::Candidate);
         assert_eq!(srv.current_term, Some(1));
-        srv.become_leader();
+        srv.become_leader().expect("failed to become leader");
         assert_eq!(srv.role, Role::Leader);
         assert_eq!(srv.current_term, Some(1));
     }
