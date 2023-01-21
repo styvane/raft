@@ -1,12 +1,10 @@
 raft
 ====
 
-[<img alt="https://github.com/styvane/raft/actions?query=branch%3Amain" src="https://img.shields.io/github/workflow/status/styvane/raft/CI/main">](https://github.com/styvane/raft/actions?query=branch%3Amain)
-
 
 This is *another* attempt implementing the [Raft](https://raft.github.io/raft.pdf) consensus algorithm.
 
-It's not production code and does not support the persistence of the key/value store.
+It's not indented to be used in production.
 
 I did not implement the following ideas in the paper:
 
