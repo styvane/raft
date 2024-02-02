@@ -1,7 +1,6 @@
 raft
 ====
 
-
 This is *another* attempt implementing the [Raft](https://raft.github.io/raft.pdf) consensus algorithm.
 
 It's not indented to be used in production.
